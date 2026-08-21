@@ -1,0 +1,23 @@
+{
+  "name": "telegram-marketplace",
+  "version": "1.0.0",
+  "description": "Telegram Marketplace Bot - Product catalog, order management, ticket/chat relay",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "npx nodemon index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "telegram",
+    "marketplace",
+    "bot"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "node-fetch": "^2.7.0",
+    "telegraf": "^4.16.3"
+  }
+}
