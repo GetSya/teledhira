@@ -103,11 +103,14 @@ function getAllSellers() {
 
 /**
  * Check if a telegramId is admin
+ * Checks both ADMIN_IDS from .env AND role in database
  * @param {number} telegramId
  * @returns {boolean}
  */
 function isAdmin(telegramId) {
-  return config.ADMIN_IDS.includes(telegramId);
+  if (config.ADMIN_IDS.includes(telegramId)) return true;
+  const user = findByTelegramId(telegramId);
+  return user && user.role === 'admin';
 }
 
 /**
@@ -120,6 +123,36 @@ function isSeller(telegramId) {
   return user && (user.role === 'seller' || user.role === 'admin');
 }
 
+/**
+ * Get all admins
+ * @returns {Array}
+ */
+function getAllAdmins() {
+  return database.find('users', { role: 'admin' });
+}
+
+/**
+ * Promote user to admin
+ * @param {number} telegramId
+ * @returns {Promise<object|null>}
+ */
+async function setAdmin(telegramId) {
+  const user = findByTelegramId(telegramId);
+  if (!user) return null;
+  return await updateRole(user.id, 'admin');
+}
+
+/**
+ * Demote admin to buyer
+ * @param {number} telegramId
+ * @returns {Promise<object|null>}
+ */
+async function removeAdmin(telegramId) {
+  const user = findByTelegramId(telegramId);
+  if (!user) return null;
+  return await updateRole(user.id, 'buyer');
+}
+
 module.exports = {
   registerUser,
   findByTelegramId,
@@ -127,6 +160,10 @@ module.exports = {
   getAllUsers,
   updateRole,
   getAllSellers,
+  getAllAdmins,
   isAdmin,
   isSeller,
+  setAdmin,
+  removeAdmin,
 };
+

@@ -257,6 +257,8 @@ async function showAdminUsers(ctx, page = 0) {
   const start = currentPage * perPage;
   const pageUsers = users.slice(start, start + perPage);
 
+  const roleEmoji = { admin: '⚙️', seller: '👨‍💼', buyer: '👤' };
+
   let text = `👥 <b>USERS</b> (${users.length})\n\n`;
 
   if (users.length === 0) {
@@ -265,18 +267,134 @@ async function showAdminUsers(ctx, page = 0) {
     pageUsers.forEach((u, i) => {
       const num = start + i + 1;
       const name = u.firstName || u.username || '-';
-      text += `<b>${num}.</b> ${escapeHtml(name)}\n`;
+      const rEmoji = roleEmoji[u.role] || '👤';
+      text += `<b>${num}.</b> ${escapeHtml(name)} ${rEmoji}\n`;
       text += `    ID: ${u.id} | Role: ${u.role}\n`;
       text += `    TG: <code>${u.telegramId}</code>\n\n`;
     });
   }
 
   const buttons = [];
+
+  // Per-user action button
+  pageUsers.forEach((u) => {
+    buttons.push([
+      Markup.button.callback(`👤 ${truncate(u.firstName || u.username || u.id, 14)} (${u.role})`, `adm_user_detail_${u.id}`),
+    ]);
+  });
+
   if (totalPages > 1) {
     buttons.push(paginationRow('adm_users_page', currentPage, totalPages));
   }
+  buttons.push([Markup.button.callback('⚙️ Kelola Admin', 'adm_manage_admins')]);
   buttons.push(navRow('admin_panel'));
 
+  return safeEditOrReply(ctx, text, { reply_markup: { inline_keyboard: buttons } });
+}
+
+/**
+ * Show Admin Management page — list all DB-role admins
+ */
+async function showAdminManagement(ctx) {
+  if (!requireAdmin(ctx)) return;
+
+  const admins = userService.getAllAdmins();
+  const superAdminIds = config.ADMIN_IDS;
+
+  let text =
+    `⚙️ <b>KELOLA ADMIN</b>\n` +
+    `━━━━━━━━━━━━━━━━━━━\n\n` +
+    `<b>Admin dari .env (Super Admin):</b>\n`;
+
+  if (superAdminIds.length === 0) {
+    text += `  <i>Tidak ada</i>\n`;
+  } else {
+    superAdminIds.forEach((id) => {
+      const u = userService.findByTelegramId(id);
+      const name = u ? escapeHtml(u.firstName || u.username || String(id)) : String(id);
+      text += `  ⭐ ${name} (<code>${id}</code>)\n`;
+    });
+  }
+
+  text += `\n<b>Admin dari Database (${admins.length}):</b>\n`;
+
+  if (admins.length === 0) {
+    text += `  <i>Belum ada.</i>\n`;
+  } else {
+    admins.forEach((a, i) => {
+      const isSuperAdmin = superAdminIds.includes(a.telegramId);
+      const name = escapeHtml(a.firstName || a.username || '-');
+      text += `  <b>${i + 1}.</b> ${name} <code>${a.telegramId}</code>${isSuperAdmin ? ' ⭐' : ''}\n`;
+    });
+  }
+
+  text += `\n<i>Gunakan tombol di bawah untuk menambah atau mencabut admin.</i>`;
+
+  const buttons = [
+    [Markup.button.callback('➕ Tambah Admin', 'adm_admin_add')],
+  ];
+
+  // Show revoke buttons for DB admins that are NOT super admins from .env
+  admins
+    .filter((a) => !superAdminIds.includes(a.telegramId))
+    .forEach((a) => {
+      const name = truncate(a.firstName || a.username || a.id, 16);
+      buttons.push([
+        Markup.button.callback(`❌ Cabut: ${name}`, `adm_admin_revoke_${a.telegramId}`),
+      ]);
+    });
+
+  buttons.push(navRow('admin_users'));
+  return safeEditOrReply(ctx, text, { reply_markup: { inline_keyboard: buttons } });
+}
+
+/**
+ * Show a single user detail + role management buttons
+ */
+async function showUserDetail(ctx, userId) {
+  if (!requireAdmin(ctx)) return;
+
+  const user = userService.getUserById(userId);
+  if (!user) {
+    await ctx.answerCbQuery('User tidak ditemukan.').catch(() => {});
+    return;
+  }
+
+  const roleLabels = { buyer: '👤 Buyer', seller: '👨‍💼 Seller', admin: '⚙️ Admin' };
+  const isSuperAdmin = config.ADMIN_IDS.includes(user.telegramId);
+
+  const text =
+    `👤 <b>DETAIL USER</b>\n` +
+    `━━━━━━━━━━━━━━━━━━━\n\n` +
+    `<b>ID:</b> ${user.id}\n` +
+    `<b>Nama:</b> ${escapeHtml(user.firstName || '-')}\n` +
+    `<b>Username:</b> ${user.username ? '@' + escapeHtml(user.username) : '-'}\n` +
+    `<b>Telegram ID:</b> <code>${user.telegramId}</code>\n` +
+    `<b>Role:</b> ${roleLabels[user.role] || user.role}${isSuperAdmin ? ' ⭐ Super Admin' : ''}\n` +
+    `<b>Status:</b> ${user.status === 'active' ? '✅ Aktif' : '⛔ Nonaktif'}\n` +
+    `<b>Bergabung:</b> ${formatDate(user.createdAt)}\n\n` +
+    `<i>Pilih aksi di bawah:</i>`;
+
+  const buttons = [];
+
+  if (!isSuperAdmin) {
+    // Role change buttons
+    if (user.role !== 'admin') {
+      buttons.push([Markup.button.callback('⚙️ Jadikan Admin', `adm_role_set_${user.id}_admin`)]);
+    } else {
+      buttons.push([Markup.button.callback('❌ Cabut Admin → Buyer', `adm_role_set_${user.id}_buyer`)]);
+    }
+    if (user.role !== 'seller') {
+      buttons.push([Markup.button.callback('👨‍💼 Jadikan Seller', `adm_role_set_${user.id}_seller`)]);
+    }
+    if (user.role !== 'buyer' && user.role !== 'admin') {
+      buttons.push([Markup.button.callback('👤 Jadikan Buyer', `adm_role_set_${user.id}_buyer`)]);
+    }
+  } else {
+    buttons.push([Markup.button.callback('⭐ Super Admin (dari .env)', 'noop')]);
+  }
+
+  buttons.push(navRow('admin_users'));
   return safeEditOrReply(ctx, text, { reply_markup: { inline_keyboard: buttons } });
 }
 
@@ -652,6 +770,47 @@ async function handleAdminInput(ctx) {
     return true;
   }
 
+  // ── Add Admin Flow ──
+  if (session.step === 'add_admin_tgid') {
+    const telegramId = parseInt(text.trim(), 10);
+    if (isNaN(telegramId)) {
+      await ctx.reply('❌ Masukkan Telegram ID yang valid (angka).', { parse_mode: 'HTML' });
+      return true;
+    }
+
+    clearAdminSession(ctx.from.id);
+
+    if (config.ADMIN_IDS.includes(telegramId)) {
+      await ctx.reply(
+        `ℹ️ User <code>${telegramId}</code> sudah menjadi Super Admin (dari .env).`,
+        { parse_mode: 'HTML' }
+      );
+      return true;
+    }
+
+    const user = userService.findByTelegramId(telegramId);
+    if (!user) {
+      await ctx.reply(
+        `❌ User dengan Telegram ID <code>${telegramId}</code> belum terdaftar.\n` +
+        `User harus mengirim /start ke bot terlebih dahulu.`,
+        { parse_mode: 'HTML' }
+      );
+      return true;
+    }
+
+    await userService.updateRole(user.id, 'admin');
+    logger.info(`Admin ${ctx.from.id} promoted TG ${telegramId} to admin via UI`);
+    await ctx.reply(
+      `✅ <b>Admin berhasil ditambahkan!</b>\n\n` +
+      `<b>User:</b> ${escapeHtml(user.firstName || user.username || '-')}\n` +
+      `<b>ID:</b> ${user.id}\n` +
+      `<b>TG ID:</b> <code>${user.telegramId}</code>\n` +
+      `<b>Role:</b> ⚙️ Admin`,
+      { parse_mode: 'HTML' }
+    );
+    return true;
+  }
+
   // ── Edit Product Text Inputs ──
   if (session.step === 'edit_product_field') {
     const product = productService.getProductById(session.data.productId);
@@ -999,6 +1158,184 @@ function register(bot) {
   bot.action('admin_stats', async (ctx) => {
     await ctx.answerCbQuery().catch(() => {});
     await showAdminStats(ctx);
+  });
+
+  // ── Admin Management ──
+
+  // Kelola Admin page
+  bot.action('adm_manage_admins', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => {});
+    await showAdminManagement(ctx);
+  });
+
+  // User detail page
+  bot.action(/^adm_user_detail_(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery().catch(() => {});
+    await showUserDetail(ctx, ctx.match[1]);
+  });
+
+  // Role set: promote/demote by user ID
+  bot.action(/^adm_role_set_(.+)_(admin|seller|buyer)$/, async (ctx) => {
+    if (!requireAdmin(ctx)) return;
+    const userId = ctx.match[1];
+    const newRole = ctx.match[2];
+
+    const user = userService.getUserById(userId);
+    if (!user) {
+      await ctx.answerCbQuery('User tidak ditemukan.');
+      return;
+    }
+
+    // Protect super admin from demotion via bot
+    if (config.ADMIN_IDS.includes(user.telegramId) && newRole !== 'admin') {
+      await ctx.answerCbQuery('⚠️ Super Admin (.env) tidak bisa diubah via bot.');
+      return;
+    }
+
+    await userService.updateRole(userId, newRole);
+    const roleLabel = { admin: '⚙️ Admin', seller: '👨‍💼 Seller', buyer: '👤 Buyer' }[newRole];
+    await ctx.answerCbQuery(`✅ Role diubah ke ${roleLabel}`);
+    logger.info(`Admin ${ctx.from.id} set user ${userId} role to ${newRole}`);
+    await showUserDetail(ctx, userId);
+  });
+
+  // Revoke admin by TG ID (from manage admins page)
+  bot.action(/^adm_admin_revoke_(\d+)$/, async (ctx) => {
+    if (!requireAdmin(ctx)) return;
+    const telegramId = parseInt(ctx.match[1], 10);
+
+    if (config.ADMIN_IDS.includes(telegramId)) {
+      await ctx.answerCbQuery('⚠️ Super Admin (.env) tidak bisa dicabut.');
+      return;
+    }
+
+    const user = userService.findByTelegramId(telegramId);
+    if (!user) {
+      await ctx.answerCbQuery('User tidak ditemukan.');
+      return;
+    }
+
+    await userService.updateRole(user.id, 'buyer');
+    await ctx.answerCbQuery(`✅ Admin ${user.firstName || user.username} berhasil dicabut.`);
+    logger.info(`Admin ${ctx.from.id} revoked admin from TG ${telegramId}`);
+    await showAdminManagement(ctx);
+  });
+
+  // Add admin prompt
+  bot.action('adm_admin_add', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => {});
+    if (!requireAdmin(ctx)) return;
+    setAdminSession(ctx.from.id, { step: 'add_admin_tgid' });
+    await ctx.reply(
+      '⚙️ Masukkan <b>Telegram ID</b> user yang ingin dijadikan admin:\n\n' +
+      '<i>User harus sudah mengirim /start ke bot terlebih dahulu.</i>',
+      { parse_mode: 'HTML' }
+    );
+  });
+
+  // /setadmin command (admin only)
+  bot.command('setadmin', async (ctx) => {
+    if (!requireAdmin(ctx)) {
+      await ctx.reply('⛔ Akses ditolak.');
+      return;
+    }
+
+    const args = ctx.message.text.split(' ').slice(1);
+    if (args.length === 0) {
+      await ctx.reply(
+        '⚙️ <b>Set Admin</b>\n\n' +
+        'Cara penggunaan:\n' +
+        '<code>/setadmin &lt;telegram_id&gt;</code>\n\n' +
+        'Contoh: <code>/setadmin 123456789</code>\n\n' +
+        'Untuk mencabut admin:\n' +
+        '<code>/removeadmin &lt;telegram_id&gt;</code>',
+        { parse_mode: 'HTML' }
+      );
+      return;
+    }
+
+    const telegramId = parseInt(args[0], 10);
+    if (isNaN(telegramId)) {
+      await ctx.reply('❌ Telegram ID harus berupa angka.', { parse_mode: 'HTML' });
+      return;
+    }
+
+    const user = userService.findByTelegramId(telegramId);
+    if (!user) {
+      await ctx.reply(
+        `❌ User dengan Telegram ID <code>${telegramId}</code> belum terdaftar.\n` +
+        `User harus mengirim /start ke bot terlebih dahulu.`,
+        { parse_mode: 'HTML' }
+      );
+      return;
+    }
+
+    await userService.updateRole(user.id, 'admin');
+    logger.info(`/setadmin: ${ctx.from.id} promoted TG ${telegramId} to admin`);
+    await ctx.reply(
+      `✅ <b>Admin berhasil ditambahkan!</b>\n\n` +
+      `<b>User:</b> ${escapeHtml(user.firstName || user.username || '-')}\n` +
+      `<b>ID:</b> ${user.id}\n` +
+      `<b>TG ID:</b> <code>${user.telegramId}</code>\n` +
+      `<b>Role:</b> ⚙️ Admin`,
+      { parse_mode: 'HTML' }
+    );
+  });
+
+  // /removeadmin command
+  bot.command('removeadmin', async (ctx) => {
+    if (!requireAdmin(ctx)) {
+      await ctx.reply('⛔ Akses ditolak.');
+      return;
+    }
+
+    const args = ctx.message.text.split(' ').slice(1);
+    if (args.length === 0) {
+      await ctx.reply(
+        '⚙️ Cara penggunaan: <code>/removeadmin &lt;telegram_id&gt;</code>',
+        { parse_mode: 'HTML' }
+      );
+      return;
+    }
+
+    const telegramId = parseInt(args[0], 10);
+    if (isNaN(telegramId)) {
+      await ctx.reply('❌ Telegram ID harus berupa angka.', { parse_mode: 'HTML' });
+      return;
+    }
+
+    if (config.ADMIN_IDS.includes(telegramId)) {
+      await ctx.reply('⚠️ <b>Super Admin (dari .env) tidak bisa dicabut via bot.</b>', { parse_mode: 'HTML' });
+      return;
+    }
+
+    const user = userService.findByTelegramId(telegramId);
+    if (!user) {
+      await ctx.reply(
+        `❌ User dengan Telegram ID <code>${telegramId}</code> tidak ditemukan.`,
+        { parse_mode: 'HTML' }
+      );
+      return;
+    }
+
+    if (user.role !== 'admin') {
+      await ctx.reply(
+        `⚠️ User <b>${escapeHtml(user.firstName || user.username)}</b> bukan admin.`,
+        { parse_mode: 'HTML' }
+      );
+      return;
+    }
+
+    await userService.updateRole(user.id, 'buyer');
+    logger.info(`/removeadmin: ${ctx.from.id} revoked admin from TG ${telegramId}`);
+    await ctx.reply(
+      `✅ <b>Admin berhasil dicabut!</b>\n\n` +
+      `<b>User:</b> ${escapeHtml(user.firstName || user.username || '-')}\n` +
+      `<b>ID:</b> ${user.id}\n` +
+      `<b>TG ID:</b> <code>${user.telegramId}</code>\n` +
+      `<b>Role sekarang:</b> 👤 Buyer`,
+      { parse_mode: 'HTML' }
+    );
   });
 }
 
