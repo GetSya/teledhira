@@ -1337,6 +1337,108 @@ function register(bot) {
       { parse_mode: 'HTML' }
     );
   });
+
+  // /pay <nominal> command (Admin Only)
+  bot.command('pay', async (ctx) => {
+    if (!requireAdmin(ctx)) {
+      await ctx.reply('⛔ Akses ditolak. Hanya admin yang dapat menggunakan perintah ini.', { parse_mode: 'HTML' });
+      return;
+    }
+
+    const args = ctx.message.text.split(' ').slice(1);
+    const nominal = parseInt(args[0], 10);
+
+    if (!args[0] || isNaN(nominal) || nominal <= 0) {
+      await ctx.reply(
+        '💳 <b>Tagihan Pembayaran QRIS (Admin Only)</b>\n\n' +
+        'Cara penggunaan:\n' +
+        '<code>/pay &lt;nominal&gt;</code>\n\n' +
+        'Contoh:\n' +
+        '<code>/pay 10000</code>\n' +
+        '<code>/pay 50000</code>',
+        { parse_mode: 'HTML' }
+      );
+      return;
+    }
+
+    const loadingMsg = await ctx.reply(`⏳ Membuat QRIS sebesar <b>${formatCurrency(nominal)}</b>...`, { parse_mode: 'HTML' });
+
+    try {
+      // Generate QRIS PNG image buffer
+      const imageBuffer = await donationService.generateQrisImage(nominal);
+
+      // Check if admin is currently in an active ticket session
+      const ticketHandler = require('./ticket');
+      const activeTicketId = ticketHandler.getActiveTicket(ctx.from.id);
+
+      if (activeTicketId) {
+        const ticket = ticketService.getTicketById(activeTicketId);
+        if (ticket && ticket.status !== 'closed') {
+          const buyerUser = userService.getUserById(ticket.buyerId);
+
+          const caption =
+            `💳 <b>TAGIHAN PEMBAYARAN QRIS</b>\n` +
+            `━━━━━━━━━━━━━━━━━━━\n` +
+            `<b>Nominal:</b> ${formatCurrency(nominal)}\n` +
+            `<b>Ticket ID:</b> #${ticket.id}\n` +
+            (ticket.orderId ? `<b>Order ID:</b> #${ticket.orderId}\n` : '') +
+            `━━━━━━━━━━━━━━━━━━━\n` +
+            `📱 <i>Silakan scan QRIS di atas menggunakan e-Wallet (DANA, OVO, GoPay, ShopeePay) atau m-Banking Anda.</i>`;
+
+          // Send photo to admin chat
+          await ctx.replyWithPhoto({ source: imageBuffer }, { caption, parse_mode: 'HTML' });
+
+          // Send photo to buyer if buyer exists
+          if (buyerUser && buyerUser.telegramId) {
+            await bot.telegram.sendPhoto(buyerUser.telegramId, { source: imageBuffer }, { caption, parse_mode: 'HTML' });
+          }
+
+          // Log message in ticket history
+          await ticketService.addMessage({
+            ticketId: activeTicketId,
+            senderId: ctx.from.id,
+            senderRole: 'admin',
+            message: `[Tagihan QRIS Dikirim: ${formatCurrency(nominal)}]`,
+            messageType: 'qris',
+          });
+
+          // Delete loading message
+          if (loadingMsg && loadingMsg.message_id) {
+            await ctx.telegram.deleteMessage(ctx.chat.id, loadingMsg.message_id).catch(() => {});
+          }
+
+          await ctx.reply(
+            `✅ QRIS Tagihan <b>${formatCurrency(nominal)}</b> berhasil dikirimkan ke buyer di Ticket <b>#${activeTicketId}</b>!`,
+            { parse_mode: 'HTML' }
+          );
+          logger.info(`Admin ${ctx.from.id} generated QRIS ${nominal} for ticket ${activeTicketId}`);
+          return;
+        }
+      }
+
+      // If not in ticket session
+      const caption =
+        `💳 <b>QRIS PEMBAYARAN</b>\n` +
+        `━━━━━━━━━━━━━━━━━━━\n` +
+        `<b>Nominal:</b> ${formatCurrency(nominal)}\n` +
+        `━━━━━━━━━━━━━━━━━━━\n` +
+        `📱 <i>Silakan scan QRIS di atas menggunakan e-Wallet (DANA, OVO, GoPay, ShopeePay) atau m-Banking Anda.</i>`;
+
+      await ctx.replyWithPhoto({ source: imageBuffer }, { caption, parse_mode: 'HTML' });
+
+      if (loadingMsg && loadingMsg.message_id) {
+        await ctx.telegram.deleteMessage(ctx.chat.id, loadingMsg.message_id).catch(() => {});
+      }
+
+      logger.info(`Admin ${ctx.from.id} generated QRIS ${nominal}`);
+    } catch (err) {
+      logger.error('Error in /pay command:', err.message);
+      if (loadingMsg && loadingMsg.message_id) {
+        await ctx.telegram.deleteMessage(ctx.chat.id, loadingMsg.message_id).catch(() => {});
+      }
+      await ctx.reply(`❌ Gagal membuat QRIS: ${escapeHtml(err.message)}`, { parse_mode: 'HTML' });
+    }
+  });
 }
 
 module.exports = {

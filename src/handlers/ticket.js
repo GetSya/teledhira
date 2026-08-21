@@ -145,7 +145,7 @@ async function showTicketDetail(ctx, ticketId) {
 }
 
 /**
- * Open/activate ticket for chat relay
+ * Open/activate ticket for chat relay (2-way automatic connection)
  */
 async function openTicketChat(ctx, ticketId) {
   const user = userService.findByTelegramId(ctx.from.id);
@@ -168,7 +168,49 @@ async function openTicketChat(ctx, ticketId) {
     return;
   }
 
+  // 1. Activate active ticket session for the user who clicked
   setActiveTicket(ctx.from.id, ticketId);
+
+  const openerName = escapeHtml(user.firstName || user.username || (isAdmin ? 'Admin' : 'User'));
+
+  // 2. Activate active ticket session for opponent user (Buyer or Seller/Admin)
+  let opponentUserId = null;
+  if (user.id === ticket.buyerId) {
+    opponentUserId = ticket.sellerId || ticket.assignedAdminId;
+  } else {
+    opponentUserId = ticket.buyerId;
+  }
+
+  if (opponentUserId) {
+    const opponentUser = userService.getUserById(opponentUserId);
+    if (opponentUser && opponentUser.telegramId) {
+      setActiveTicket(opponentUser.telegramId, ticketId);
+
+      const notifText =
+        `💬 <b>SESI CHAT TICKET #${ticket.id} DIBUKA</b>\n\n` +
+        `<b>${openerName}</b> telah membuka sesi chat.\n` +
+        `Kalian berdua sekarang terhubung! Silakan ketik pesan langsung di sini untuk berkirim pesan secara 2-arah.`;
+
+      const notifButtons = [
+        [Markup.button.callback('❌ Tutup Ticket', `ticket_close_${ticket.id}`)],
+        [Markup.button.callback('🏠 Menu Utama', 'menu_main')],
+      ];
+
+      await messageService.sendToUser(
+        { telegram: ctx.telegram },
+        opponentUser.telegramId,
+        notifText,
+        { reply_markup: { inline_keyboard: notifButtons } }
+      );
+    }
+  } else if (user.id === ticket.buyerId) {
+    // If buyer opened support ticket and no specific seller assigned, activate for super admins
+    for (const adminId of config.ADMIN_IDS) {
+      if (adminId !== ctx.from.id) {
+        setActiveTicket(adminId, ticketId);
+      }
+    }
+  }
 
   const text =
     `💬 <b>SESI CHAT TICKET #${ticket.id} AKTIF</b>\n\n` +
@@ -222,7 +264,21 @@ async function closeTicket(ctx, ticketId) {
   }
 
   await ticketService.closeTicket(ticketId);
+
+  // Clear active tickets for both buyer and admin/seller
   clearActiveTicket(ctx.from.id);
+
+  const buyerUser = userService.getUserById(ticket.buyerId);
+  if (buyerUser && buyerUser.telegramId) {
+    clearActiveTicket(buyerUser.telegramId);
+  }
+
+  if (ticket.sellerId) {
+    const sellerUser = userService.getUserById(ticket.sellerId);
+    if (sellerUser && sellerUser.telegramId) {
+      clearActiveTicket(sellerUser.telegramId);
+    }
+  }
 
   const closerRole = ticket.buyerId === user.id ? 'Buyer' : 'Seller/Admin';
   const notifText =
