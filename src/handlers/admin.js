@@ -10,6 +10,7 @@ const productService = require('../services/productService');
 const orderService = require('../services/orderService');
 const ticketService = require('../services/ticketService');
 const messageService = require('../services/messageService');
+const donationService = require('../services/donationService');
 const { formatCurrency, formatDate, formatOrderStatus, formatTicketStatus, formatProductStatus, escapeHtml, truncate } = require('../utils/format');
 const { adminPanelMenu, navRow, paginationRow, safeEditOrReply } = require('../utils/keyboard');
 const config = require('../config');
@@ -315,18 +316,21 @@ async function showShopSettings(ctx) {
   const shopName = escapeHtml(settings.shopName || 'Marketplace Store');
   const shopDesc = escapeHtml(settings.shopDescription || '-');
   const logoStatus = settings.shopLogo ? '🖼️ Ada Logo' : '📷 Tanpa Logo';
+  const qrisCode = donationService.getQrisCode();
 
   const text =
     `⚙️ <b>PENGATURAN TOKO</b>\n` +
     `━━━━━━━━━━━━━━━━━━━\n\n` +
     `🏪 <b>Nama Toko:</b>\n${shopName}\n\n` +
     `📝 <b>Deskripsi Toko:</b>\n${shopDesc}\n\n` +
-    `🖼️ <b>Logo/Gambar Toko:</b>\n${logoStatus}\n`;
+    `🖼️ <b>Logo/Gambar Toko:</b>\n${logoStatus}\n\n` +
+    `💳 <b>String Kode QRIS:</b>\n<code>${truncate(qrisCode, 35)}</code>\n`;
 
   const buttons = [
     [Markup.button.callback('✏️ Edit Nama Toko', 'adm_set_name')],
     [Markup.button.callback('✏️ Edit Deskripsi Toko', 'adm_set_desc')],
     [Markup.button.callback('🖼️ Upload Logo Toko', 'adm_set_logo')],
+    [Markup.button.callback('💳 Edit QRIS Payload', 'adm_set_qris')],
     navRow('admin_panel'),
   ];
 
@@ -343,12 +347,15 @@ async function showAdminStats(ctx) {
   const orders = orderService.getAllOrders();
   const tickets = ticketService.getAllTickets();
   const sellers = userService.getAllSellers();
+  const donations = donationService.getAllDonations();
 
   const activeOrders = orders.filter((o) => !['completed', 'cancelled', 'refunded'].includes(o.status));
   const openTickets = tickets.filter((t) => t.status !== 'closed');
   const totalRevenue = orders
     .filter((o) => ['paid', 'processing', 'completed'].includes(o.status))
     .reduce((sum, o) => sum + o.total, 0);
+
+  const totalDonationAmount = donations.reduce((sum, d) => sum + Number(d.nominal), 0);
 
   const text =
     `📊 <b>STATISTIK MARKETPLACE</b>\n\n` +
@@ -359,7 +366,8 @@ async function showAdminStats(ctx) {
     `🔄 <b>Order Aktif:</b> ${activeOrders.length}\n` +
     `🎫 <b>Total Ticket:</b> ${tickets.length}\n` +
     `🟢 <b>Ticket Open:</b> ${openTickets.length}\n` +
-    `💰 <b>Total Pendapatan:</b> ${formatCurrency(totalRevenue)}\n`;
+    `💰 <b>Total Pendapatan:</b> ${formatCurrency(totalRevenue)}\n` +
+    `🎁 <b>Total Donasi:</b> ${formatCurrency(totalDonationAmount)} (${donations.length}x)\n`;
 
   const buttons = [navRow('admin_panel')];
 
@@ -477,6 +485,18 @@ async function handleAdminInput(ctx) {
     clearAdminSession(ctx.from.id);
     await ctx.reply('✅ Deskripsi toko berhasil diupdate!');
     await showShopSettings(ctx);
+    return true;
+  }
+
+  if (session.step === 'set_qris_code') {
+    try {
+      await donationService.setQrisCode(text);
+      clearAdminSession(ctx.from.id);
+      await ctx.reply('✅ Kode QRIS Payload berhasil diupdate!');
+      await showShopSettings(ctx);
+    } catch (err) {
+      await ctx.reply(`❌ ${escapeHtml(err.message)}`);
+    }
     return true;
   }
 
@@ -694,6 +714,27 @@ function register(bot) {
     if (!requireAdmin(ctx)) return;
     setAdminSession(ctx.from.id, { step: 'upload_shop_logo' });
     await ctx.reply('🖼️ Silakan <b>kirim gambar/foto logo toko</b> di chat ini:', { parse_mode: 'HTML' });
+  });
+
+  bot.action('adm_set_qris', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => {});
+    if (!requireAdmin(ctx)) return;
+    setAdminSession(ctx.from.id, { step: 'set_qris_code' });
+    await ctx.reply(
+      '💳 Masukkan <b>QRIS Payload String</b> baru:\n\n' +
+      `Current QRIS: <code>${escapeHtml(donationService.getQrisCode())}</code>`,
+      { parse_mode: 'HTML' }
+    );
+  });
+
+  bot.command('setqris', async (ctx) => {
+    if (!requireAdmin(ctx)) return;
+    setAdminSession(ctx.from.id, { step: 'set_qris_code' });
+    await ctx.reply(
+      '💳 Masukkan <b>QRIS Payload String</b> baru:\n\n' +
+      `Current QRIS: <code>${escapeHtml(donationService.getQrisCode())}</code>`,
+      { parse_mode: 'HTML' }
+    );
   });
 
   // ── Product Image Upload Action ──

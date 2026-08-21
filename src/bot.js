@@ -18,6 +18,7 @@ const adminHandler = require('./handlers/admin');
 const sellerHandler = require('./handlers/seller');
 const supportHandler = require('./handlers/support');
 const accountHandler = require('./handlers/account');
+const donationHandler = require('./handlers/donation');
 
 // Initialize bot
 const bot = new Telegraf(config.BOT_TOKEN);
@@ -57,6 +58,7 @@ adminHandler.register(bot);
 sellerHandler.register(bot);
 supportHandler.register(bot);
 accountHandler.register(bot);
+donationHandler.register(bot);
 
 // ── Photo message handler (shop logo / product image uploads) ──
 bot.on('photo', async (ctx) => {
@@ -68,7 +70,7 @@ bot.on('photo', async (ctx) => {
   }
 });
 
-// ── Text message handler (ticket relay + admin input) ──
+// ── Text message handler (ticket relay + admin input + donation custom input) ──
 bot.on('text', async (ctx) => {
   if (ctx.message.text.startsWith('/')) return;
 
@@ -77,7 +79,11 @@ bot.on('text', async (ctx) => {
     const adminHandled = await adminHandler.handleAdminInput(ctx);
     if (adminHandled) return;
 
-    // 2. Ticket chat relay
+    // 2. Donation custom nominal input
+    const donationHandled = await donationHandler.handleDonationInput(ctx);
+    if (donationHandled) return;
+
+    // 3. Ticket chat relay
     const ticketHandled = await ticketHandler.handleTicketMessage(ctx, bot);
     if (ticketHandled) return;
   } catch (err) {

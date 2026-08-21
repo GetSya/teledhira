@@ -60,11 +60,13 @@ const DEFAULT_DB = {
   orders: [],
   tickets: [],
   messages: [],
+  donations: [],
   settings: {
     currency: 'IDR',
     shopName: 'Marketplace Store',
     shopDescription: 'Selamat datang di Toko Marketplace Telegram Resmi!',
     shopLogo: null, // relative path e.g. "media/logo.jpg"
+    qrisCode: '00020101021126570011ID.DANA.WWW011893600915390930088102099093008810303UMI51440014ID.CO.QRIS.WWW0215ID10254040171760303UMI5204737253033605802ID5910Jojo Store6010Kota Bogor61051634163046B01',
     maintenance: false,
     counters: {
       usrCounter: 10001,
@@ -73,6 +75,7 @@ const DEFAULT_DB = {
       tktCounter: 10001,
       tktSupCounter: 10001,
       msgCounter: 10001,
+      donCounter: 10001,
       catCounter: 5,
     },
   },
@@ -144,11 +147,17 @@ function readDB() {
     if (!db.orders) db.orders = [];
     if (!db.tickets) db.tickets = [];
     if (!db.messages) db.messages = [];
+    if (!db.donations) db.donations = [];
     if (!db.settings) db.settings = {};
     if (!db.settings.shopName) db.settings.shopName = 'Marketplace Store';
     if (!db.settings.shopDescription) db.settings.shopDescription = 'Selamat datang di Toko Marketplace Telegram!';
     if (db.settings.shopLogo === undefined) db.settings.shopLogo = null;
+    if (!db.settings.qrisCode) {
+      db.settings.qrisCode = '00020101021126570011ID.DANA.WWW011893600915390930088102099093008810303UMI51440014ID.CO.QRIS.WWW0215ID10254040171760303UMI5204737253033605802ID5910Jojo Store6010Kota Bogor61051634163046B01';
+    }
     if (!db.settings.counters) db.settings.counters = {};
+    if (!db.settings.counters.donCounter) db.settings.counters.donCounter = 10001;
+    return db;
     return db;
   } catch (err) {
     logger.error('Failed to read db.json:', err.message);

@@ -17,6 +17,7 @@ function userMainMenu() {
     ],
     [
       Markup.button.callback('📦 Pesanan Saya', 'my_orders'),
+      Markup.button.callback('🎁 Donasi', 'menu_donate'),
     ],
     [
       Markup.button.callback('🎫 Ticket Saya', 'my_tickets'),
@@ -26,10 +27,7 @@ function userMainMenu() {
 }
 
 /**
- * Admin Main Menu Inline Keyboard (6 buttons, formation 3 - 2 - 1)
- * Row 1: [ 🛍 Marketplace ] [ 🛒 Keranjang ] [ 📦 Pesanan ]
- * Row 2: [ 🎫 Ticket ] [ 👤 Akun ]
- * Row 3: [ ⚙️ Admin Panel ]
+ * Admin Main Menu Inline Keyboard
  */
 function adminMainMenu() {
   return Markup.inlineKeyboard([
@@ -41,6 +39,7 @@ function adminMainMenu() {
     [
       Markup.button.callback('🎫 Ticket', 'my_tickets'),
       Markup.button.callback('👤 Akun', 'my_account'),
+      Markup.button.callback('🎁 Donasi', 'menu_donate'),
     ],
     [
       Markup.button.callback('⚙️ Admin Panel', 'admin_panel'),
@@ -69,6 +68,45 @@ function adminPanelMenu() {
     [
       Markup.button.callback('📊 Statistik', 'admin_stats'),
       Markup.button.callback('⚙️ Pengaturan Toko', 'admin_settings'),
+    ],
+    [
+      Markup.button.callback('🏠 Menu Utama', 'menu_main'),
+    ],
+  ]);
+}
+
+/**
+ * Donation Preset Keyboard
+ */
+function donationPresetMenu() {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('🎁 Rp 5.000', 'donate_preset_5000'),
+      Markup.button.callback('🎁 Rp 10.000', 'donate_preset_10000'),
+    ],
+    [
+      Markup.button.callback('🎁 Rp 20.000', 'donate_preset_20000'),
+      Markup.button.callback('🎁 Rp 50.000', 'donate_preset_50000'),
+    ],
+    [
+      Markup.button.callback('🎁 Rp 100.000', 'donate_preset_100000'),
+      Markup.button.callback('✏️ Custom Nominal', 'donate_custom'),
+    ],
+    [
+      Markup.button.callback('📜 Riwayat Donasi', 'donate_history'),
+      Markup.button.callback('🏠 Menu Utama', 'menu_main'),
+    ],
+  ]);
+}
+
+/**
+ * Donation Action Menu for generated QRIS
+ */
+function donationActionMenu(nominal) {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('✅ Saya Sudah Bayar', `donate_confirm_${nominal}`),
+      Markup.button.callback('🔄 Pilih Nominal Lain', 'menu_donate'),
     ],
     [
       Markup.button.callback('🏠 Menu Utama', 'menu_main'),
@@ -144,6 +182,8 @@ module.exports = {
   userMainMenu,
   adminMainMenu,
   adminPanelMenu,
+  donationPresetMenu,
+  donationActionMenu,
   backButton,
   homeButton,
   navRow,
