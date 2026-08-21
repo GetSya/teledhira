@@ -37,21 +37,20 @@ async function showMainMenu(ctx) {
   const hasLogo = logoPath && fs.existsSync(logoPath);
 
   try {
-    if (ctx.callbackQuery) {
-      // If previous message was photo or has logo
-      if (hasLogo) {
-        // If current message is already a photo message, edit caption
-        if (ctx.callbackQuery.message && ctx.callbackQuery.message.photo) {
-          try {
-            await ctx.editMessageCaption(text, {
-              parse_mode: 'HTML',
-              ...keyboard,
-            });
-            return;
-          } catch (e) {}
+    if (hasLogo) {
+      if (text.length <= 1000) {
+        if (ctx.callbackQuery) {
+          if (ctx.callbackQuery.message && ctx.callbackQuery.message.photo) {
+            try {
+              await ctx.editMessageCaption(text, {
+                parse_mode: 'HTML',
+                ...keyboard,
+              });
+              return;
+            } catch (e) {}
+          }
+          await ctx.deleteMessage().catch(() => {});
         }
-        // Otherwise delete text message and send photo
-        await ctx.deleteMessage().catch(() => {});
         await ctx.replyWithPhoto(
           { source: fs.createReadStream(logoPath) },
           {
@@ -61,26 +60,22 @@ async function showMainMenu(ctx) {
           }
         );
       } else {
-        // No logo: use safeEditOrReply
-        await safeEditOrReply(ctx, text, keyboard);
-      }
-    } else {
-      // Command /start
-      if (hasLogo) {
+        // Teks > 1000 karakter: Kirim logo + caption singkat, lalu kirim teks lengkap
+        const shortCaption = `🏪 <b>${shopName}</b>`;
+        if (ctx.callbackQuery) {
+          await ctx.deleteMessage().catch(() => {});
+        }
         await ctx.replyWithPhoto(
           { source: fs.createReadStream(logoPath) },
-          {
-            caption: text,
-            parse_mode: 'HTML',
-            ...keyboard,
-          }
+          { caption: shortCaption, parse_mode: 'HTML' }
         );
-      } else {
         await ctx.reply(text, {
           parse_mode: 'HTML',
           ...keyboard,
         });
       }
+    } else {
+      await safeEditOrReply(ctx, text, keyboard);
     }
   } catch (err) {
     if (!err.message.includes('message is not modified')) {

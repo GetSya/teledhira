@@ -56,9 +56,20 @@ async function showProductDetail(ctx, productId) {
   const hasImage = imagePath && fs.existsSync(imagePath);
 
   try {
-    if (ctx.callbackQuery) {
-      if (hasImage) {
-        await ctx.deleteMessage().catch(() => {});
+    if (hasImage) {
+      if (text.length <= 1000) {
+        if (ctx.callbackQuery) {
+          if (ctx.callbackQuery.message && ctx.callbackQuery.message.photo) {
+            try {
+              await ctx.editMessageCaption(text, {
+                parse_mode: 'HTML',
+                reply_markup: { inline_keyboard: buttons },
+              });
+              return;
+            } catch (e) {}
+          }
+          await ctx.deleteMessage().catch(() => {});
+        }
         await ctx.replyWithPhoto(
           { source: fs.createReadStream(imagePath) },
           {
@@ -68,24 +79,22 @@ async function showProductDetail(ctx, productId) {
           }
         );
       } else {
-        await safeEditOrReply(ctx, text, { reply_markup: { inline_keyboard: buttons } });
-      }
-    } else {
-      if (hasImage) {
+        // Teks > 1000 karakter: Kirim foto + caption singkat terlebih dahulu, lalu kirim teks detail lengkap
+        const shortCaption = `📦 <b>${escapeHtml(product.name)}</b>`;
+        if (ctx.callbackQuery) {
+          await ctx.deleteMessage().catch(() => {});
+        }
         await ctx.replyWithPhoto(
           { source: fs.createReadStream(imagePath) },
-          {
-            caption: text,
-            parse_mode: 'HTML',
-            reply_markup: { inline_keyboard: buttons },
-          }
+          { caption: shortCaption, parse_mode: 'HTML' }
         );
-      } else {
         await ctx.reply(text, {
           parse_mode: 'HTML',
           reply_markup: { inline_keyboard: buttons },
         });
       }
+    } else {
+      await safeEditOrReply(ctx, text, { reply_markup: { inline_keyboard: buttons } });
     }
   } catch (err) {
     if (!err.message.includes('message is not modified')) {
