@@ -50,17 +50,20 @@ async function showAdminPanel(ctx) {
 async function showAdminProducts(ctx, page = 0) {
   if (!requireAdmin(ctx)) return;
 
-  const products = productService.getAllProducts();
+  const allProducts = productService.getAllProducts();
+  const activeProducts = allProducts.filter((p) => p.status !== 'inactive');
+  const inactiveProducts = allProducts.filter((p) => p.status === 'inactive');
+
   const perPage = config.ITEMS_PER_PAGE;
-  const totalPages = Math.max(1, Math.ceil(products.length / perPage));
+  const totalPages = Math.max(1, Math.ceil(activeProducts.length / perPage));
   const currentPage = Math.min(page, totalPages - 1);
   const start = currentPage * perPage;
-  const pageProducts = products.slice(start, start + perPage);
+  const pageProducts = activeProducts.slice(start, start + perPage);
 
-  let text = `📦 <b>KELOLA PRODUK</b> (${products.length})\n\n`;
+  let text = `📦 <b>KELOLA PRODUK</b> (${activeProducts.length})\n\n`;
 
-  if (products.length === 0) {
-    text += 'Belum ada produk.';
+  if (activeProducts.length === 0) {
+    text += 'Belum ada produk aktif.';
   } else {
     pageProducts.forEach((p, i) => {
       const num = start + i + 1;
@@ -76,17 +79,67 @@ async function showAdminProducts(ctx, page = 0) {
     buttons.push([
       Markup.button.callback(`✏️ ${truncate(p.name, 16)}`, `adm_prod_edit_${p.id}`),
       Markup.button.callback('🖼️ Foto', `adm_prod_photo_${p.id}`),
-      Markup.button.callback('🗑️', `adm_prod_del_${p.id}`),
+      Markup.button.callback('🗑️ Nonaktifkan', `adm_prod_del_${p.id}`),
     ]);
   });
 
   buttons.push([Markup.button.callback('➕ Tambah Produk Baru', 'adm_prod_add')]);
+
+  if (inactiveProducts.length > 0) {
+    buttons.push([Markup.button.callback(`⛔ Produk Nonaktif (${inactiveProducts.length})`, 'adm_prod_inactive')]);
+  }
 
   if (totalPages > 1) {
     buttons.push(paginationRow('adm_prod_page', currentPage, totalPages));
   }
 
   buttons.push(navRow('admin_panel'));
+
+  return safeEditOrReply(ctx, text, { reply_markup: { inline_keyboard: buttons } });
+}
+
+/**
+ * View & Manage Inactive (Nonaktif) products page
+ */
+async function showAdminInactiveProducts(ctx, page = 0) {
+  if (!requireAdmin(ctx)) return;
+
+  const allProducts = productService.getAllProducts();
+  const inactiveProducts = allProducts.filter((p) => p.status === 'inactive');
+
+  const perPage = config.ITEMS_PER_PAGE;
+  const totalPages = Math.max(1, Math.ceil(inactiveProducts.length / perPage));
+  const currentPage = Math.min(page, totalPages - 1);
+  const start = currentPage * perPage;
+  const pageProducts = inactiveProducts.slice(start, start + perPage);
+
+  let text = `⛔ <b>PRODUK NONAKTIF</b> (${inactiveProducts.length})\n\n`;
+
+  if (inactiveProducts.length === 0) {
+    text += 'Tidak ada produk nonaktif.';
+  } else {
+    pageProducts.forEach((p, i) => {
+      const num = start + i + 1;
+      const imgLabel = p.image ? '🖼️ Ada Foto' : '📷 Tanpa Foto';
+      text += `<b>${num}.</b> ${escapeHtml(p.name)}\n`;
+      text += `    ${formatCurrency(p.price)} | Stok: ${p.stock} | ${imgLabel} | ⛔ Nonaktif\n\n`;
+    });
+  }
+
+  const buttons = [];
+
+  pageProducts.forEach((p) => {
+    buttons.push([
+      Markup.button.callback(`✏️ ${truncate(p.name, 14)}`, `adm_prod_edit_${p.id}`),
+      Markup.button.callback('✅ Aktifkan Kembali', `adm_prod_restore_${p.id}`),
+    ]);
+  });
+
+  if (totalPages > 1) {
+    buttons.push(paginationRow('adm_prod_inactive_page', currentPage, totalPages));
+  }
+
+  buttons.push(navRow('admin_products'));
 
   return safeEditOrReply(ctx, text, { reply_markup: { inline_keyboard: buttons } });
 }
@@ -992,10 +1045,30 @@ function register(bot) {
   });
 
   bot.action(/^adm_prod_del_(.+)$/, async (ctx) => {
-    await ctx.answerCbQuery().catch(() => {});
     if (!requireAdmin(ctx)) return;
-    await productService.deleteProduct(ctx.match[1]);
+    const productId = ctx.match[1];
+    await productService.deleteProduct(productId);
+    await ctx.answerCbQuery('🗑️ Produk dipindahkan ke daftar Nonaktif.');
     await showAdminProducts(ctx, 0);
+  });
+
+  bot.action('adm_prod_inactive', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => {});
+    await showAdminInactiveProducts(ctx, 0);
+  });
+
+  bot.action(/^adm_prod_inactive_page_(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery().catch(() => {});
+    const page = parseInt(ctx.match[1], 10);
+    await showAdminInactiveProducts(ctx, page);
+  });
+
+  bot.action(/^adm_prod_restore_(.+)$/, async (ctx) => {
+    if (!requireAdmin(ctx)) return;
+    const productId = ctx.match[1];
+    await productService.updateProduct(productId, { status: 'active' });
+    await ctx.answerCbQuery('✅ Produk berhasil diaktifkan kembali!');
+    await showAdminInactiveProducts(ctx, 0);
   });
 
   // ── Category Actions & CRUD ──
