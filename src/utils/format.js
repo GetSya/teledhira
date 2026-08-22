@@ -114,8 +114,35 @@ function truncate(text, maxLen = 50) {
   return text.substring(0, maxLen - 3) + '...';
 }
 
+/**
+ * Format number with dot separators without Rp prefix (e.g. 10.000)
+ * @param {number} amount
+ * @returns {string}
+ */
+function formatNumberCurrency(amount) {
+  const num = Math.abs(Number(amount) || 0);
+  return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+}
+
+/**
+ * Get current time string formatted as HH:mm:ss WIB
+ * @returns {string} e.g. "21:23:32 WIB"
+ */
+function getWibTimestamp() {
+  const d = new Date();
+  // Adjust for WIB (UTC+7)
+  const utc = d.getTime() + d.getTimezoneOffset() * 60000;
+  const wibDate = new Date(utc + 7 * 3600000);
+  const h = String(wibDate.getHours()).padStart(2, '0');
+  const m = String(wibDate.getMinutes()).padStart(2, '0');
+  const s = String(wibDate.getSeconds()).padStart(2, '0');
+  return `${h}:${m}:${s} WIB`;
+}
+
 module.exports = {
   formatCurrency,
+  formatNumberCurrency,
+  getWibTimestamp,
   formatDate,
   formatDateTime,
   formatOrderStatus,
@@ -124,3 +151,4 @@ module.exports = {
   escapeHtml,
   truncate,
 };
+

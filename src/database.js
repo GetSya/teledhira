@@ -82,44 +82,11 @@ const DEFAULT_DB = {
 };
 
 // ── Seed data ──
-const SEED_PRODUCTS = [
-  {
-    id: 'PRD-10001',
-    categoryId: 'CAT-001',
-    name: 'Produk Premium',
-    description: 'Produk premium dengan kualitas terbaik. Proses manual oleh seller berpengalaman.',
-    price: 50000,
-    stock: 10,
-    status: 'active',
-    sellerId: null,
-    image: null,
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: 'PRD-10002',
-    categoryId: 'CAT-002',
-    name: 'Software License',
-    description: 'Lisensi software original. Aktivasi manual setelah pembayaran dikonfirmasi.',
-    price: 150000,
-    stock: 5,
-    status: 'active',
-    sellerId: null,
-    image: null,
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: 'PRD-10003',
-    categoryId: 'CAT-003',
-    name: 'Jasa Desain Grafis',
-    description: 'Jasa desain grafis profesional. Konsultasi melalui ticket setelah order.',
-    price: 100000,
-    stock: 99,
-    status: 'active',
-    sellerId: null,
-    image: null,
-    createdAt: new Date().toISOString(),
-  },
-];
+const SEED_PRODUCTS = [];
+
+
+
+
 
 // ── Write Mutex ──
 let writeChain = Promise.resolve();
@@ -306,8 +273,41 @@ const database = {
     });
   },
 
+  restoreDB(newDb) {
+    return new Promise((resolve, reject) => {
+      writeChain = writeChain.then(() => {
+        try {
+          if (!newDb || typeof newDb !== 'object') {
+            throw new Error('Data backup tidak valid.');
+          }
+          if (!Array.isArray(newDb.users)) newDb.users = [];
+          if (!Array.isArray(newDb.products)) newDb.products = [];
+          if (!Array.isArray(newDb.categories)) newDb.categories = [];
+          if (!Array.isArray(newDb.orders)) newDb.orders = [];
+
+          if (!Array.isArray(newDb.tickets)) newDb.tickets = [];
+          if (!Array.isArray(newDb.messages)) newDb.messages = [];
+          if (!Array.isArray(newDb.donations)) newDb.donations = [];
+          if (!newDb.settings || typeof newDb.settings !== 'object') newDb.settings = {};
+
+          if (fs.existsSync(DB_PATH)) {
+            const backupPath = `${DB_PATH}.bak`;
+            fs.copyFileSync(DB_PATH, backupPath);
+          }
+
+          writeDBSync(newDb);
+          resolve(newDb);
+        } catch (err) {
+          reject(err);
+        }
+      });
+    });
+  },
+
+  DB_PATH,
   MEDIA_DIR,
   ITEM_MEDIA_DIR,
 };
 
 module.exports = database;
+

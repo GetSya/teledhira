@@ -70,10 +70,14 @@ function adminPanelMenu() {
       Markup.button.callback('⚙️ Pengaturan Toko', 'admin_settings'),
     ],
     [
+      Markup.button.callback('💾 Backup & Restore', 'admin_backup_restore'),
+    ],
+    [
       Markup.button.callback('🏠 Menu Utama', 'menu_main'),
     ],
   ]);
 }
+
 
 /**
  * Donation Preset Keyboard

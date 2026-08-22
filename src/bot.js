@@ -70,6 +70,17 @@ bot.on('photo', async (ctx) => {
   }
 });
 
+// ── Document message handler (db.json backup restore) ──
+bot.on('document', async (ctx) => {
+  try {
+    const adminDocHandled = await adminHandler.handleAdminDocument(ctx);
+    if (adminDocHandled) return;
+  } catch (err) {
+    logger.error('Document handler error:', err.message);
+  }
+});
+
+
 // ── Text message handler (ticket relay + admin input + donation custom input) ──
 bot.on('text', async (ctx) => {
   if (ctx.message.text.startsWith('/')) return;

@@ -16,16 +16,32 @@ function generateId(db, prefix, startFrom = 10001) {
   if (!db.settings.counters) db.settings.counters = {};
 
   const counterKey = `${prefix.toLowerCase()}Counter`;
+  let currentVal = db.settings.counters[counterKey] || startFrom;
 
-  if (!db.settings.counters[counterKey]) {
-    db.settings.counters[counterKey] = startFrom;
+  const collectionMap = {
+    PRD: 'products',
+    CAT: 'categories',
+    USR: 'users',
+    ORD: 'orders',
+    TKT: 'tickets',
+    MSG: 'messages',
+    DON: 'donations',
+  };
+
+  const collectionName = collectionMap[prefix];
+  if (collectionName && Array.isArray(db[collectionName])) {
+    const existingIds = db[collectionName].map((item) => item.id).filter(Boolean);
+    while (existingIds.includes(`${prefix}-${currentVal}`)) {
+      currentVal++;
+    }
   }
 
-  const id = `${prefix}-${db.settings.counters[counterKey]}`;
-  db.settings.counters[counterKey]++;
+  const id = `${prefix}-${currentVal}`;
+  db.settings.counters[counterKey] = currentVal + 1;
 
   return id;
 }
+
 
 /**
  * Generate support ticket ID

@@ -49,8 +49,15 @@ async function showProductDetail(ctx, productId) {
     buttons.push([Markup.button.callback('❌ Stok Habis', 'noop')]);
   }
 
-  const backCb = product.categoryId ? `category_${product.categoryId}` : 'menu_marketplace';
+  let backCb = product.categoryId ? `category_${product.categoryId}` : 'menu_marketplace';
+  if (product.categoryId && product.name) {
+    const groupVariants = productService.getProductsByName(product.categoryId, product.name);
+    if (groupVariants.length > 1 || (groupVariants.length === 1 && groupVariants[0].duration)) {
+      backCb = `pgrp_${product.categoryId}_${encodeURIComponent(product.name)}`;
+    }
+  }
   buttons.push(navRow(backCb));
+
 
   const imagePath = product.image ? path.join(__dirname, '..', '..', product.image) : null;
   const hasImage = imagePath && fs.existsSync(imagePath);

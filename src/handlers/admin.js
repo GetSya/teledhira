@@ -50,37 +50,54 @@ async function showAdminPanel(ctx) {
 async function showAdminProducts(ctx, page = 0) {
   if (!requireAdmin(ctx)) return;
 
+  const productGroups = productService.getAllProductGroups();
   const allProducts = productService.getAllProducts();
-  const activeProducts = allProducts.filter((p) => p.status !== 'inactive');
   const inactiveProducts = allProducts.filter((p) => p.status === 'inactive');
 
   const perPage = config.ITEMS_PER_PAGE;
-  const totalPages = Math.max(1, Math.ceil(activeProducts.length / perPage));
+  const totalPages = Math.max(1, Math.ceil(productGroups.length / perPage));
   const currentPage = Math.min(page, totalPages - 1);
   const start = currentPage * perPage;
-  const pageProducts = activeProducts.slice(start, start + perPage);
+  const pageGroups = productGroups.slice(start, start + perPage);
 
-  let text = `📦 <b>KELOLA PRODUK</b> (${activeProducts.length})\n\n`;
+  let text = `📦 <b>KELOLA PRODUK</b> (${productGroups.length} Produk Utama)\n\n`;
 
-  if (activeProducts.length === 0) {
+  if (productGroups.length === 0) {
     text += 'Belum ada produk aktif.';
   } else {
-    pageProducts.forEach((p, i) => {
+    pageGroups.forEach((g, i) => {
       const num = start + i + 1;
-      const imgLabel = p.image ? '🖼️ Ada Foto' : '📷 Tanpa Foto';
-      text += `<b>${num}.</b> ${escapeHtml(p.name)}\n`;
-      text += `    ${formatCurrency(p.price)} | Stok: ${p.stock} | ${imgLabel} | ${formatProductStatus(p.status)}\n\n`;
+      if (g.hasVariants) {
+        const variantSummary = g.items
+          .map((v) => `${v.variant || 'Standard'} (${formatCurrency(v.price)}, Stok: ${v.stock})`)
+          .join(' | ');
+        text += `<b>${num}. ${escapeHtml(g.name)}</b> (${g.count} Varian)\n`;
+        text += `    ${escapeHtml(variantSummary)}\n\n`;
+      } else {
+        const p = g.sampleProduct;
+        const imgLabel = p.image ? '🖼️ Foto' : '📷 Tanpa Foto';
+        text += `<b>${num}. ${escapeHtml(p.name)}</b>\n`;
+        text += `    ${formatCurrency(p.price)} | Stok: ${p.stock} | ${imgLabel} | ${formatProductStatus(p.status)}\n\n`;
+      }
     });
   }
 
   const buttons = [];
 
-  pageProducts.forEach((p) => {
-    buttons.push([
-      Markup.button.callback(`✏️ ${truncate(p.name, 16)}`, `adm_prod_edit_${p.id}`),
-      Markup.button.callback('🖼️ Foto', `adm_prod_photo_${p.id}`),
-      Markup.button.callback('🗑️ Nonaktifkan', `adm_prod_del_${p.id}`),
-    ]);
+  pageGroups.forEach((g) => {
+    if (g.hasVariants) {
+      const encName = encodeURIComponent(g.name);
+      buttons.push([
+        Markup.button.callback(`✏️ Kelola ${truncate(g.name, 16)} (${g.count} Varian)`, `adm_grp_edit_${encName}`),
+      ]);
+    } else {
+      const p = g.sampleProduct;
+      buttons.push([
+        Markup.button.callback(`✏️ ${truncate(p.name, 16)}`, `adm_prod_edit_${p.id}`),
+        Markup.button.callback('🖼️ Foto', `adm_prod_photo_${p.id}`),
+        Markup.button.callback('🗑️ Nonaktifkan', `adm_prod_del_${p.id}`),
+      ]);
+    }
   });
 
   buttons.push([Markup.button.callback('➕ Tambah Produk Baru', 'adm_prod_add')]);
@@ -97,6 +114,50 @@ async function showAdminProducts(ctx, page = 0) {
 
   return safeEditOrReply(ctx, text, { reply_markup: { inline_keyboard: buttons } });
 }
+
+/**
+ * Show admin sub-menu for managing variants of a product group
+ */
+async function showAdminGroupVariants(ctx, productName) {
+  if (!requireAdmin(ctx)) return;
+
+  const variants = productService.getProductsByNameAll(productName);
+  if (variants.length === 0) {
+    if (ctx.callbackQuery) await ctx.answerCbQuery('Produk tidak ditemukan.');
+    return showAdminProducts(ctx, 0);
+  }
+
+  const parentProduct = variants[0];
+  let text =
+    `⚙️ <b>KELOLA VARIAN: ${escapeHtml(productName)}</b> (${variants.length} Varian)\n` +
+    `━━━━━━━━━━━━━━━━━━━\n\n` +
+    `Pilih varian di bawah ini untuk mengedit harga, nama varian, stok, atau status:\n\n`;
+
+  variants.forEach((v, i) => {
+    const varLabel = v.variant ? escapeHtml(v.variant) : 'Standard';
+    text += `<b>${i + 1}. Varian: ${varLabel}</b>\n`;
+    text += `    Harga: ${formatCurrency(v.price)} | Stok: ${v.stock} | ${formatProductStatus(v.status)}\n\n`;
+  });
+
+  const buttons = [];
+
+  variants.forEach((v) => {
+    const varLabel = v.variant ? v.variant : v.name;
+    buttons.push([
+      Markup.button.callback(`✏️ Edit Varian: ${truncate(varLabel, 18)}`, `adm_prod_edit_${v.id}`),
+      Markup.button.callback('🗑️', `adm_prod_del_${v.id}`),
+    ]);
+  });
+
+  buttons.push([
+    Markup.button.callback('➕ Tambah Varian Baru', `adm_prod_add_var_${parentProduct.id}`),
+  ]);
+
+  buttons.push(navRow('admin_products'));
+
+  return safeEditOrReply(ctx, text, { reply_markup: { inline_keyboard: buttons } });
+}
+
 
 /**
  * View & Manage Inactive (Nonaktif) products page
@@ -693,8 +754,23 @@ async function handleAdminInput(ctx) {
   if (session.step === 'add_product_desc') {
     setAdminSession(ctx.from.id, {
       ...session,
-      step: 'add_product_price',
+      step: 'add_product_variant',
       data: { ...session.data, description: text },
+    });
+    const buttons = [[Markup.button.callback('⏩ Tanpa Varian', 'adm_prod_skip_variant')]];
+    await ctx.reply(
+      '🏷️ Masukkan <b>nama varian</b> (contoh: "1 Bulan", "2 Bulan", "Private", atau klik tombol di bawah / ketik "-" jika tanpa varian):',
+      { parse_mode: 'HTML', reply_markup: { inline_keyboard: buttons } }
+    );
+    return true;
+  }
+
+  if (session.step === 'add_product_variant') {
+    const variantVal = (text.trim() === '-' || text.trim() === '') ? null : text.trim();
+    setAdminSession(ctx.from.id, {
+      ...session,
+      step: 'add_product_price',
+      data: { ...session.data, variant: variantVal },
     });
     await ctx.reply('💰 Masukkan <b>harga</b> (angka saja):', { parse_mode: 'HTML' });
     return true;
@@ -722,11 +798,12 @@ async function handleAdminInput(ctx) {
       return true;
     }
 
-    const { name, categoryId, description, price } = session.data;
+    const { name, variant, categoryId, description, price } = session.data;
     clearAdminSession(ctx.from.id);
 
     const product = await productService.createProduct({
       name,
+      variant: variant || null,
       categoryId,
       description,
       price,
@@ -734,21 +811,95 @@ async function handleAdminInput(ctx) {
       sellerId: null,
     });
 
+    const displayLabel = productService.getProductDisplayLabel(product);
+
     const buttons = [
-      [Markup.button.callback('🖼️ Upload Foto Produk Sekarang', `adm_prod_photo_${product.id}`)],
+      [Markup.button.callback('➕ Tambah Varian Lain untuk Produk Ini', `adm_prod_add_var_${product.id}`)],
+      [Markup.button.callback('🖼️ Upload Foto Produk', `adm_prod_photo_${product.id}`)],
       [Markup.button.callback('📦 Lihat Semua Produk', 'admin_products')],
     ];
 
     await ctx.reply(
       `✅ <b>Produk berhasil ditambahkan!</b>\n\n` +
       `<b>ID:</b> ${product.id}\n` +
-      `<b>Nama:</b> ${escapeHtml(product.name)}\n` +
+      `<b>Produk:</b> ${escapeHtml(product.name)}\n` +
+      `<b>Varian:</b> ${escapeHtml(displayLabel)}\n` +
       `<b>Harga:</b> ${formatCurrency(product.price)}\n` +
       `<b>Stok:</b> ${product.stock}`,
       { parse_mode: 'HTML', reply_markup: { inline_keyboard: buttons } }
     );
     return true;
   }
+
+  // ── Add Variant Flow ──
+  if (session.step === 'add_variant_name') {
+    const variantVal = (text.trim() === '-' || text.trim() === '') ? null : text.trim();
+    setAdminSession(ctx.from.id, {
+      ...session,
+      step: 'add_variant_price',
+      data: { ...session.data, variant: variantVal },
+    });
+    await ctx.reply(`💰 Masukkan <b>harga</b> untuk varian "<b>${escapeHtml(text)}</b>" (angka saja):`, { parse_mode: 'HTML' });
+    return true;
+  }
+
+  if (session.step === 'add_variant_price') {
+    const price = parseInt(text.replace(/\D/g, ''), 10);
+    if (isNaN(price) || price <= 0) {
+      await ctx.reply('❌ Harga harus berupa angka positif.', { parse_mode: 'HTML' });
+      return true;
+    }
+    setAdminSession(ctx.from.id, {
+      ...session,
+      step: 'add_variant_stock',
+      data: { ...session.data, price },
+    });
+    await ctx.reply('📦 Masukkan <b>stok awal</b> untuk varian ini (angka):', { parse_mode: 'HTML' });
+    return true;
+  }
+
+  if (session.step === 'add_variant_stock') {
+    const stock = parseInt(text, 10);
+    if (isNaN(stock) || stock < 0) {
+      await ctx.reply('❌ Stok harus berupa angka >= 0.', { parse_mode: 'HTML' });
+      return true;
+    }
+
+    const { parentProduct, variant, price } = session.data;
+    clearAdminSession(ctx.from.id);
+
+    const newProduct = await productService.createProduct({
+      name: parentProduct.name,
+      variant,
+      categoryId: parentProduct.categoryId,
+      description: parentProduct.description,
+      price,
+      stock,
+      sellerId: parentProduct.sellerId || null,
+      image: parentProduct.image || null,
+    });
+
+    const displayLabel = productService.getProductDisplayLabel(newProduct);
+
+    const buttons = [
+      [Markup.button.callback('➕ Tambah Varian Lain Lagi', `adm_prod_add_var_${parentProduct.id}`)],
+      [Markup.button.callback('✏️ Edit Varian Ini', `adm_prod_edit_${newProduct.id}`)],
+      [Markup.button.callback('📦 Lihat Semua Produk', 'admin_products')],
+    ];
+
+    await ctx.reply(
+      `✅ <b>Varian baru berhasil ditambahkan!</b>\n\n` +
+      `<b>ID:</b> ${newProduct.id}\n` +
+      `<b>Produk:</b> ${escapeHtml(newProduct.name)}\n` +
+      `<b>Varian:</b> ${escapeHtml(displayLabel)}\n` +
+      `<b>Harga:</b> ${formatCurrency(newProduct.price)}\n` +
+      `<b>Stok:</b> ${newProduct.stock}`,
+      { parse_mode: 'HTML', reply_markup: { inline_keyboard: buttons } }
+    );
+    return true;
+  }
+
+
 
   // ── Category CRUD Text Inputs ──
   if (session.step === 'add_cat_name') {
@@ -880,15 +1031,95 @@ async function handleAdminInput(ctx) {
       value = parseInt(text.replace(/\D/g, ''), 10);
     } else if (field === 'stock') {
       value = parseInt(text, 10);
+    } else if (['duration', 'variant'].includes(field) && text.trim() === '-') {
+      value = null;
     }
 
     clearAdminSession(ctx.from.id);
     await productService.updateProduct(session.data.productId, { [field]: value });
     await ctx.reply(`✅ Produk <b>${escapeHtml(product.name)}</b> field <b>${field}</b> berhasil diupdate.`, { parse_mode: 'HTML' });
     return true;
+
   }
 
   return false;
+}
+
+/**
+ * Show Admin Backup & Restore Menu
+ */
+async function showAdminBackupRestoreMenu(ctx) {
+  if (!requireAdmin(ctx)) return;
+
+  const text =
+    `💾 <b>KELOLA BACKUP & RESTORE DATABASE</b>\n` +
+    `━━━━━━━━━━━━━━━━━━━\n\n` +
+    `Pilih aksi kelola database di bawah ini:\n` +
+    `• <b>Download Backup:</b> Bot akan mengirimkan file <code>db.json</code> terbaru.\n` +
+    `• <b>Restore Database:</b> Upload file <code>.json</code> backup untuk memulihkan seluruh data toko.`;
+
+  const buttons = [
+    [Markup.button.callback('📥 Download Backup Database (db.json)', 'adm_db_backup')],
+    [Markup.button.callback('📤 Restore Database dari File', 'adm_db_restore')],
+    navRow('admin_panel'),
+  ];
+
+  return safeEditOrReply(ctx, text, { reply_markup: { inline_keyboard: buttons } });
+}
+
+/**
+ * Handle document uploads (Database JSON Restore)
+ */
+async function handleAdminDocument(ctx) {
+  if (!userService.isAdmin(ctx.from.id)) return false;
+
+  const session = getAdminSession(ctx.from.id);
+  if (!session || session.step !== 'restore_database') return false;
+
+  const doc = ctx.message.document;
+  if (!doc) return false;
+
+  if (!doc.file_name || !doc.file_name.toLowerCase().endsWith('.json')) {
+    await ctx.reply('❌ File yang dikirim harus berformat <b>.json</b> (contoh: db.json atau db_backup_*.json).', { parse_mode: 'HTML' });
+    return true;
+  }
+
+  try {
+    const fileLink = await ctx.telegram.getFileLink(doc.file_id);
+    const fetch = (await import('node-fetch')).default || globalThis.fetch;
+    const res = await fetch(fileLink.href);
+    const text = await res.text();
+
+    const parsed = JSON.parse(text);
+
+    if (typeof parsed !== 'object' || parsed === null) {
+      throw new Error('Isi file JSON tidak valid.');
+    }
+
+    await database.restoreDB(parsed);
+    clearAdminSession(ctx.from.id);
+
+    const prodCount = Array.isArray(parsed.products) ? parsed.products.length : 0;
+    const userCount = Array.isArray(parsed.users) ? parsed.users.length : 0;
+    const orderCount = Array.isArray(parsed.orders) ? parsed.orders.length : 0;
+
+    await ctx.reply(
+      `✅ <b>DATABASE BERHASIL DI-RESTORE!</b>\n\n` +
+      `📊 <b>Ringkasan Data Terpulihkan:</b>\n` +
+      `• Produk: ${prodCount}\n` +
+      `• User: ${userCount}\n` +
+      `• Order: ${orderCount}\n\n` +
+      `<i>Database aman terupdate.</i>`,
+      { parse_mode: 'HTML' }
+    );
+
+    await showAdminPanel(ctx);
+    return true;
+  } catch (err) {
+    logger.error('Failed to restore database:', err.message);
+    await ctx.reply(`❌ <b>Gagal memulihkan database:</b> ${escapeHtml(err.message)}`, { parse_mode: 'HTML' });
+    return true;
+  }
 }
 
 function register(bot) {
@@ -900,6 +1131,45 @@ function register(bot) {
     await ctx.answerCbQuery().catch(() => {});
     await showAdminPanel(ctx);
   });
+
+  // ── Backup & Restore Actions ──
+  bot.action('admin_backup_restore', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => {});
+    await showAdminBackupRestoreMenu(ctx);
+  });
+
+  bot.action('adm_db_backup', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => {});
+    if (!requireAdmin(ctx)) return;
+
+    if (!fs.existsSync(database.DB_PATH)) {
+      await ctx.reply('❌ File database db.json tidak ditemukan.');
+      return;
+    }
+
+    const d = new Date();
+    const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const filename = `db_backup_${dateStr}.json`;
+
+    await ctx.replyWithDocument(
+      { source: database.DB_PATH, filename },
+      { caption: '💾 <b>Backup database db.json berhasil didownload!</b>', parse_mode: 'HTML' }
+    );
+  });
+
+  bot.action('adm_db_restore', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => {});
+    if (!requireAdmin(ctx)) return;
+
+    setAdminSession(ctx.from.id, { step: 'restore_database', data: {} });
+    await ctx.reply(
+      `📤 <b>RESTORE DATABASE</b>\n\n` +
+      `Silakan <b>kirimkan file JSON backup (db.json atau file .json)</b> ke chat bot ini.\n\n` +
+      `<i>⚠️ Peringatan: Restore akan menimpa data produk, user, dan order saat ini dengan data dari file backup!</i>`,
+      { parse_mode: 'HTML' }
+    );
+  });
+
 
   // ── Shop Settings Actions ──
   bot.action('admin_settings', async (ctx) => {
@@ -992,6 +1262,45 @@ function register(bot) {
     await ctx.reply('📝 Masukkan <b>deskripsi</b> produk:', { parse_mode: 'HTML' });
   });
 
+  bot.action('adm_prod_skip_variant', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => {});
+    if (!requireAdmin(ctx)) return;
+    const session = getAdminSession(ctx.from.id);
+    if (!session || session.step !== 'add_product_variant') return;
+
+    setAdminSession(ctx.from.id, {
+      ...session,
+      step: 'add_product_price',
+      data: { ...session.data, variant: null },
+    });
+    await ctx.reply('💰 Masukkan <b>harga</b> (angka saja):', { parse_mode: 'HTML' });
+  });
+
+  bot.action(/^adm_prod_add_var_(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery().catch(() => {});
+    if (!requireAdmin(ctx)) return;
+    const productId = ctx.match[1];
+    const product = productService.getProductById(productId);
+    if (!product) return;
+
+    setAdminSession(ctx.from.id, {
+      step: 'add_variant_name',
+      data: { parentProduct: product },
+    });
+
+    await ctx.reply(
+      `🏷️ Masukkan <b>nama varian baru</b> untuk produk <b>${escapeHtml(product.name)}</b> (contoh: "1 Bulan", "2 Bulan", "Private"):`,
+      { parse_mode: 'HTML' }
+    );
+  });
+
+  bot.action(/^adm_grp_edit_(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery().catch(() => {});
+    if (!requireAdmin(ctx)) return;
+    const productName = decodeURIComponent(ctx.match[1]);
+    await showAdminGroupVariants(ctx, productName);
+  });
+
   bot.action(/^adm_prod_edit_(.+)$/, async (ctx) => {
     await ctx.answerCbQuery().catch(() => {});
     if (!requireAdmin(ctx)) return;
@@ -999,25 +1308,40 @@ function register(bot) {
     const product = productService.getProductById(productId);
     if (!product) return;
 
+    let backCb = 'admin_products';
+    if (product.name) {
+      const groupVariants = productService.getProductsByNameAll(product.name);
+      if (groupVariants.length > 1 || (groupVariants.length === 1 && groupVariants[0].variant)) {
+        backCb = `adm_grp_edit_${encodeURIComponent(product.name)}`;
+      }
+    }
+
     const text =
       `✏️ <b>EDIT PRODUK ${product.id}</b>\n\n` +
       `<b>Nama:</b> ${escapeHtml(product.name)}\n` +
+      `<b>Varian:</b> ${escapeHtml(product.variant || '-')}\n` +
       `<b>Harga:</b> ${formatCurrency(product.price)}\n` +
       `<b>Stok:</b> ${product.stock}\n` +
       `<b>Status:</b> ${formatProductStatus(product.status)}\n\n` +
       `Pilih field yang ingin diedit:`;
 
     const buttons = [
-      [Markup.button.callback('📝 Nama', `adm_prod_ef_${productId}_name`)],
-      [Markup.button.callback('💰 Harga', `adm_prod_ef_${productId}_price`)],
-      [Markup.button.callback('📦 Stok', `adm_prod_ef_${productId}_stock`)],
+      [
+        Markup.button.callback('📝 Nama', `adm_prod_ef_${productId}_name`),
+        Markup.button.callback('🏷️ Varian', `adm_prod_ef_${productId}_variant`),
+      ],
+      [
+        Markup.button.callback('💰 Harga', `adm_prod_ef_${productId}_price`),
+        Markup.button.callback('📦 Stok', `adm_prod_ef_${productId}_stock`),
+      ],
+      [Markup.button.callback('➕ Tambah Varian Baru', `adm_prod_add_var_${productId}`)],
       [Markup.button.callback('📋 Deskripsi', `adm_prod_ef_${productId}_description`)],
       [
         Markup.button.callback('✅ Aktif', `adm_prod_st_${productId}_active`),
         Markup.button.callback('⛔ Nonaktif', `adm_prod_st_${productId}_inactive`),
       ],
       [Markup.button.callback('🖼️ Upload/Ubah Foto', `adm_prod_photo_${productId}`)],
-      navRow('admin_products'),
+      navRow(backCb),
     ];
 
     await ctx.editMessageText(text, {
@@ -1026,14 +1350,17 @@ function register(bot) {
     });
   });
 
+
+
   bot.action(/^adm_prod_ef_(.+)_(.+)$/, async (ctx) => {
     await ctx.answerCbQuery().catch(() => {});
     if (!requireAdmin(ctx)) return;
     const productId = ctx.match[1];
     const field = ctx.match[2];
     setAdminSession(ctx.from.id, { step: 'edit_product_field', data: { productId, field } });
-    await ctx.reply(`✏️ Masukkan <b>${field}</b> baru:`, { parse_mode: 'HTML' });
+    await ctx.reply(`✏️ Masukkan <b>${field}</b> baru (atau ketik "-" untuk mengosongkan):`, { parse_mode: 'HTML' });
   });
+
 
   bot.action(/^adm_prod_st_(.+)_(active|inactive)$/, async (ctx) => {
     if (!requireAdmin(ctx)) return;
@@ -1518,6 +1845,8 @@ module.exports = {
   register,
   handleAdminInput,
   handleAdminPhoto,
+  handleAdminDocument,
   getAdminSession,
   clearAdminSession,
 };
+

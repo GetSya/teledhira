@@ -3,11 +3,13 @@
 // ─────────────────────────────────────────────
 const database = require('../database');
 const { generateId } = require('../utils/id');
+const { formatNumberCurrency } = require('../utils/format');
 const logger = require('../utils/logger');
+
 
 /**
  * Create a new product
- * @param {object} data - { name, categoryId, description, price, stock, sellerId, image }
+ * @param {object} data - { name, categoryId, description, price, stock, sellerId, image, duration, variant }
  * @returns {Promise<object>}
  */
 async function createProduct(data) {
@@ -15,6 +17,8 @@ async function createProduct(data) {
     id: generateId(db, 'PRD'),
     categoryId: data.categoryId,
     name: data.name,
+    duration: data.duration || null,
+    variant: data.variant || null,
     description: data.description || '',
     price: Number(data.price) || 0,
     stock: Number(data.stock) || 0,
@@ -27,6 +31,7 @@ async function createProduct(data) {
   logger.info(`Product created: ${product.id} - ${product.name}`);
   return product;
 }
+
 
 /**
  * Get product by ID
@@ -70,7 +75,7 @@ function getAllProducts() {
  * @returns {Promise<object|null>}
  */
 async function updateProduct(id, updates) {
-  const allowedFields = ['name', 'categoryId', 'description', 'price', 'stock', 'status', 'sellerId', 'image'];
+  const allowedFields = ['name', 'categoryId', 'description', 'price', 'stock', 'status', 'sellerId', 'image', 'duration', 'variant'];
   const sanitized = {};
   for (const [key, val] of Object.entries(updates)) {
     if (allowedFields.includes(key)) {
@@ -89,6 +94,7 @@ async function updateProduct(id, updates) {
   }
   return updated;
 }
+
 
 /**
  * Delete (deactivate) a product
@@ -229,6 +235,150 @@ async function updateShopSettings(updates) {
   return getShopSettings();
 }
 
+/**
+ * Get display label for button or item header
+ * Format options:
+ * - with variant: "Canva Pro (1 Bulan)"
+ * - without variant: "Pulsa 10.000"
+ * @param {object} product
+ * @returns {string}
+ */
+function getProductDisplayLabel(product) {
+  if (!product) return '';
+  const name = product.name ? String(product.name).trim() : '';
+  const variant = product.variant ? String(product.variant).trim() : '';
+  if (variant) {
+    if (name.toLowerCase().includes(variant.toLowerCase())) return name;
+    return `${name} (${variant})`;
+  }
+  return name;
+}
+
+/**
+ * Get line text for catalog summary list
+ * e.g. "Canva Pro (1 Bulan) - 10.000 (Stok 90)"
+ * @param {object} product
+ * @returns {string}
+ */
+function getProductListLine(product) {
+  if (!product) return '';
+  const label = getProductDisplayLabel(product);
+  const priceFormatted = formatNumberCurrency(product.price);
+  return `${label} - ${priceFormatted} (Stok ${product.stock})`;
+}
+
+/**
+ * Get distinct product groups in a category.
+ * If multiple items have the same name (e.g. Canva Pro), they are grouped under that name.
+ * @param {string} categoryId
+ * @returns {Array} [{ name, items, count, hasVariants, sampleProduct }]
+ */
+function getProductGroupsByCategory(categoryId) {
+  const products = getProductsByCategory(categoryId);
+  const groupsMap = new Map();
+
+  products.forEach((p) => {
+    const key = p.name ? p.name.trim() : 'Unassigned';
+    if (!groupsMap.has(key)) {
+      groupsMap.set(key, []);
+    }
+    groupsMap.get(key).push(p);
+  });
+
+  const result = [];
+  groupsMap.forEach((items, name) => {
+    const hasVariants = items.length > 1 || items.some((i) => Boolean(i.variant));
+    result.push({
+      name,
+      items,
+      count: items.length,
+      hasVariants,
+      sampleProduct: items[0],
+    });
+  });
+
+  return result;
+}
+
+/**
+ * Get all active products matching categoryId and productName
+ * @param {string} categoryId
+ * @param {string} productName
+ * @returns {Array}
+ */
+function getProductsByName(categoryId, productName) {
+  const products = getProductsByCategory(categoryId);
+  return products.filter((p) => p.name && p.name.trim().toLowerCase() === productName.trim().toLowerCase());
+}
+
+/**
+ * Get label for variant button (e.g. "1 Bulan" or "Canva Pro")
+ * @param {object} product
+ * @returns {string}
+ */
+function getVariantDisplayLabel(product) {
+  if (!product) return '';
+  if (product.variant) return product.variant;
+  return product.name;
+}
+
+/**
+ * Get list line for variant view: e.g. "1 Bulan - 10.000 (Stok 90)"
+ * @param {object} product
+ * @returns {string}
+ */
+function getVariantListLine(product) {
+  if (!product) return '';
+  const label = getVariantDisplayLabel(product);
+  const priceFormatted = formatNumberCurrency(product.price);
+  return `${label} - ${priceFormatted} (Stok ${product.stock})`;
+}
+
+
+/**
+ * Get all product groups across all categories (for Admin management).
+ * Includes active products.
+ * @returns {Array} [{ name, items, count, hasVariants, sampleProduct }]
+ */
+function getAllProductGroups() {
+  const allProducts = getAllProducts().filter((p) => p.status !== 'inactive');
+  const groupsMap = new Map();
+
+  allProducts.forEach((p) => {
+    const key = p.name ? p.name.trim() : 'Unassigned';
+    if (!groupsMap.has(key)) {
+      groupsMap.set(key, []);
+    }
+    groupsMap.get(key).push(p);
+  });
+
+  const result = [];
+  groupsMap.forEach((items, name) => {
+    const hasVariants = items.length > 1 || items.some((i) => Boolean(i.variant));
+    result.push({
+      name,
+      items,
+      count: items.length,
+      hasVariants,
+      sampleProduct: items[0],
+    });
+  });
+
+  return result;
+}
+
+/**
+ * Get all products (active & inactive) matching a name
+ * @param {string} productName
+ * @returns {Array}
+ */
+function getProductsByNameAll(productName) {
+  const allProducts = getAllProducts();
+  return allProducts.filter(
+    (p) => p.name && p.name.trim().toLowerCase() === productName.trim().toLowerCase()
+  );
+}
+
 module.exports = {
   createProduct,
   getProductById,
@@ -246,4 +396,15 @@ module.exports = {
   deleteCategory,
   getShopSettings,
   updateShopSettings,
+  getProductDisplayLabel,
+  getProductListLine,
+  getProductGroupsByCategory,
+  getProductsByName,
+  getVariantDisplayLabel,
+  getVariantListLine,
+  getAllProductGroups,
+  getProductsByNameAll,
 };
+
+
+

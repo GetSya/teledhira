@@ -4,7 +4,7 @@
 // ─────────────────────────────────────────────
 const { Markup } = require('telegraf');
 const productService = require('../services/productService');
-const { formatCurrency, escapeHtml, truncate } = require('../utils/format');
+const { formatCurrency, escapeHtml, truncate, getWibTimestamp } = require('../utils/format');
 const { navRow, paginationRow, safeEditOrReply } = require('../utils/keyboard');
 const config = require('../config');
 
@@ -39,24 +39,23 @@ async function showCategories(ctx) {
 }
 
 /**
- * Show products in a category in 2x5 grid formation (2 columns x 5 rows = 10 items per page)
- * Buttons display clean product names (without "Detail" or "🔍" emoji).
+ * Show products / product groups in a category
  */
-async function showCategoryProducts(ctx, categoryId, page = 0) {
+async function showCategoryProducts(ctx, categoryId, page = 0, isRefresh = false) {
   const category = productService.getCategoryById(categoryId);
   if (!category) {
     if (ctx.callbackQuery) await ctx.answerCbQuery('Kategori tidak ditemukan.');
     return;
   }
 
-  const products = productService.getProductsByCategory(categoryId);
+  const groups = productService.getProductGroupsByCategory(categoryId);
   const perPage = config.ITEMS_PER_PAGE; // 10 items per page (2x5 grid)
-  const totalPages = Math.max(1, Math.ceil(products.length / perPage));
+  const totalPages = Math.max(1, Math.ceil(groups.length / perPage));
   const currentPage = Math.min(page, totalPages - 1);
   const start = currentPage * perPage;
-  const pageProducts = products.slice(start, start + perPage);
+  const pageGroups = groups.slice(start, start + perPage);
 
-  if (products.length === 0) {
+  if (groups.length === 0) {
     const text =
       `${category.emoji} <b>${escapeHtml(category.name)}</b>\n\n` +
       `Belum ada produk di kategori ini.`;
@@ -64,29 +63,24 @@ async function showCategoryProducts(ctx, categoryId, page = 0) {
     return safeEditOrReply(ctx, text, { reply_markup: { inline_keyboard: buttons } });
   }
 
-  let text =
-    `${category.emoji} <b>${escapeHtml(category.name)}</b> (${products.length} produk)\n` +
+  const text =
+    `${category.emoji} <b>${escapeHtml(category.name)}</b> (${groups.length} item)\n` +
     `━━━━━━━━━━━━━━━━━━━\n\n` +
-    `Pilih produk di bawah untuk melihat detail item:\n\n`;
-
-  pageProducts.forEach((p, i) => {
-    const num = start + i + 1;
-    const stockLabel = p.stock > 0 ? `Stok: ${p.stock}` : '❌ Habis';
-    const imgLabel = p.image ? '🖼️' : '📦';
-    text += `<b>${num}. ${imgLabel} ${escapeHtml(p.name)}</b>\n`;
-    text += `    💰 ${formatCurrency(p.price)} | ${stockLabel}\n\n`;
-  });
+    `Pilih produk di bawah untuk melihat pilihan varian/detail item:`;
 
   const buttons = [];
-  // Clean product name buttons (no "Detail" word, no "🔍" emoji)
-  const prodButtons = pageProducts.map((p) =>
-    Markup.button.callback(truncate(p.name, 18), `product_${p.id}`)
-  );
+  const groupButtons = pageGroups.map((g) => {
+    if (g.hasVariants) {
+      return Markup.button.callback(truncate(`📦 ${g.name}`, 24), `pgrp_${categoryId}_${encodeURIComponent(g.name)}`);
+    } else {
+      return Markup.button.callback(truncate(`📦 ${g.name}`, 24), `product_${g.sampleProduct.id}`);
+    }
+  });
 
-  // Group product buttons into 2 columns per row (2x5 grid formation)
+  // Group buttons into 2 columns per row (2x5 grid formation max 10 items per page)
   const colsPerRow = 2;
-  for (let i = 0; i < prodButtons.length; i += colsPerRow) {
-    buttons.push(prodButtons.slice(i, i + colsPerRow));
+  for (let i = 0; i < groupButtons.length; i += colsPerRow) {
+    buttons.push(groupButtons.slice(i, i + colsPerRow));
   }
 
   // Add pagination controls if more than 1 page
@@ -94,7 +88,70 @@ async function showCategoryProducts(ctx, categoryId, page = 0) {
     buttons.push(paginationRow(`mp_page_${categoryId}`, currentPage, totalPages));
   }
 
-  buttons.push(navRow('menu_marketplace'));
+  buttons.push([Markup.button.callback('← Sebelumnya', 'menu_marketplace')]);
+
+  if (isRefresh && ctx.callbackQuery) {
+    await ctx.answerCbQuery('🔄 Data diperbarui!').catch(() => {});
+  }
+
+  return safeEditOrReply(ctx, text, { reply_markup: { inline_keyboard: buttons } });
+}
+
+/**
+ * Show product duration variants in 2x5 grid formation matching requested screenshot
+ */
+async function showProductVariants(ctx, categoryId, productName, page = 0, isRefresh = false) {
+  const category = productService.getCategoryById(categoryId);
+  const variants = productService.getProductsByName(categoryId, productName);
+
+  if (variants.length === 0) {
+    if (ctx.callbackQuery) await ctx.answerCbQuery('Varian produk tidak ditemukan.');
+    return showCategoryProducts(ctx, categoryId, 0);
+  }
+
+  const perPage = config.ITEMS_PER_PAGE; // 10 items per page (2x5 grid)
+  const totalPages = Math.max(1, Math.ceil(variants.length / perPage));
+  const currentPage = Math.min(page, totalPages - 1);
+  const start = currentPage * perPage;
+  const pageVariants = variants.slice(start, start + perPage);
+
+  // Format list items according to screenshot:
+  // "1 Bulan - 10.000 (Stok 90)"
+  const listLines = pageVariants.map((v) => escapeHtml(productService.getVariantListLine(v)));
+  const timestamp = getWibTimestamp();
+
+  const text =
+    listLines.join('\n') +
+    `\n\n🔄 Diperbarui pada ${timestamp}`;
+
+  const buttons = [];
+  // Variant buttons (e.g. "1 Bulan", "2 Bulan", "3 Bulan", "12 Bulan")
+  const varButtons = pageVariants.map((v) => {
+    const label = productService.getVariantDisplayLabel(v);
+    return Markup.button.callback(truncate(label, 24), `product_${v.id}`);
+  });
+
+  // Group variant buttons into 2 columns per row (2x5 grid formation)
+  const colsPerRow = 2;
+  for (let i = 0; i < varButtons.length; i += colsPerRow) {
+    buttons.push(varButtons.slice(i, i + colsPerRow));
+  }
+
+  // Refresh button (🔄 Perbarui)
+  const encName = encodeURIComponent(productName);
+  buttons.push([Markup.button.callback('🔄 Perbarui', `pgrp_rf_${categoryId}_${encName}_${currentPage}`)]);
+
+  // Add pagination controls if more than 1 page
+  if (totalPages > 1) {
+    buttons.push(paginationRow(`vp_page_${categoryId}_${encName}`, currentPage, totalPages));
+  }
+
+  // Back button (← Sebelumnya / Kembali ke Kategori)
+  buttons.push([Markup.button.callback('← Sebelumnya', `category_${categoryId}`)]);
+
+  if (isRefresh && ctx.callbackQuery) {
+    await ctx.answerCbQuery('🔄 Data diperbarui!').catch(() => {});
+  }
 
   return safeEditOrReply(ctx, text, { reply_markup: { inline_keyboard: buttons } });
 }
@@ -111,6 +168,34 @@ function register(bot) {
     await showCategoryProducts(ctx, categoryId, 0);
   });
 
+  bot.action(/^pgrp_(.+)_(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery().catch(() => {});
+    const categoryId = ctx.match[1];
+    const productName = decodeURIComponent(ctx.match[2]);
+    await showProductVariants(ctx, categoryId, productName, 0);
+  });
+
+  bot.action(/^pgrp_rf_(.+)_(.+)_(\d+)$/, async (ctx) => {
+    const categoryId = ctx.match[1];
+    const productName = decodeURIComponent(ctx.match[2]);
+    const page = parseInt(ctx.match[3], 10);
+    await showProductVariants(ctx, categoryId, productName, page, true);
+  });
+
+  bot.action(/^vp_page_(.+)_(.+)_(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery().catch(() => {});
+    const categoryId = ctx.match[1];
+    const productName = decodeURIComponent(ctx.match[2]);
+    const page = parseInt(ctx.match[3], 10);
+    await showProductVariants(ctx, categoryId, productName, page);
+  });
+
+  bot.action(/^refresh_cat_(.+)_(\d+)$/, async (ctx) => {
+    const categoryId = ctx.match[1];
+    const page = parseInt(ctx.match[2], 10);
+    await showCategoryProducts(ctx, categoryId, page, true);
+  });
+
   bot.action(/^mp_page_(.+)_(\d+)$/, async (ctx) => {
     await ctx.answerCbQuery().catch(() => {});
     const categoryId = ctx.match[1];
@@ -120,3 +205,5 @@ function register(bot) {
 }
 
 module.exports = { register, showCategories };
+
+
