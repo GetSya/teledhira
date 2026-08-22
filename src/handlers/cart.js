@@ -41,7 +41,8 @@ async function showCart(ctx) {
     if (product) {
       const itemTotal = product.price * item.quantity;
       grandTotal += itemTotal;
-      text += `<b>${i + 1}. ${escapeHtml(product.name)}</b>\n`;
+      const displayLabel = productService.getProductDisplayLabel(product);
+      text += `<b>${i + 1}. ${escapeHtml(displayLabel)}</b>\n`;
       text += `    Jumlah: ${item.quantity} x ${formatCurrency(product.price)} = <b>${formatCurrency(itemTotal)}</b>\n\n`;
 
       buttons.push([
@@ -76,7 +77,8 @@ async function handleAddToCart(ctx, productId) {
   }
 
   await cartService.addToCart(user.id, productId, 1);
-  await ctx.answerCbQuery(`✅ ${product.name} telah ditambahkan ke keranjang!`);
+  const displayLabel = productService.getProductDisplayLabel(product);
+  await ctx.answerCbQuery(`✅ ${displayLabel} telah ditambahkan ke keranjang!`);
 }
 
 /**
@@ -102,15 +104,17 @@ async function checkoutCart(ctx) {
         continue;
       }
 
+      const displayLabel = productService.getProductDisplayLabel(product);
       // Create order
       const order = await orderService.createOrder({
         buyerId: user.id,
         sellerId: product.sellerId,
         productId: product.id,
-        productName: product.name,
+        productName: displayLabel,
         quantity: item.quantity,
         price: product.price,
       });
+
 
       await orderService.updateOrderStatus(order.id, 'waiting_payment');
       await productService.decreaseStock(product.id, item.quantity);

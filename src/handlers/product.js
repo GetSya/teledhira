@@ -33,6 +33,7 @@ async function showProductDetail(ctx, productId) {
     `🔍 <b>DETAIL ITEM</b>\n` +
     `━━━━━━━━━━━━━━━━━━━\n\n` +
     `📦 <b>Nama Produk:</b> ${escapeHtml(product.name)}\n` +
+    (product.variant ? `🏷️ <b>Varian:</b> ${escapeHtml(product.variant)}\n` : '') +
     `📁 <b>Kategori:</b> ${categoryName}\n` +
     `💰 <b>Harga:</b> ${formatCurrency(product.price)}\n` +
     `📊 <b>Stok:</b> ${stockLabel}\n\n` +
@@ -52,7 +53,7 @@ async function showProductDetail(ctx, productId) {
   let backCb = product.categoryId ? `category_${product.categoryId}` : 'menu_marketplace';
   if (product.categoryId && product.name) {
     const groupVariants = productService.getProductsByName(product.categoryId, product.name);
-    if (groupVariants.length > 1 || (groupVariants.length === 1 && groupVariants[0].duration)) {
+    if (groupVariants.length > 1 || (groupVariants.length === 1 && groupVariants[0].variant)) {
       backCb = `pgrp_${product.categoryId}_${encodeURIComponent(product.name)}`;
     }
   }
@@ -87,7 +88,7 @@ async function showProductDetail(ctx, productId) {
         );
       } else {
         // Teks > 1000 karakter: Kirim foto + caption singkat terlebih dahulu, lalu kirim teks detail lengkap
-        const shortCaption = `📦 <b>${escapeHtml(product.name)}</b>`;
+        const shortCaption = `📦 <b>${escapeHtml(productService.getProductDisplayLabel(product))}</b>`;
         if (ctx.callbackQuery) {
           await ctx.deleteMessage().catch(() => {});
         }
@@ -132,15 +133,17 @@ async function buyProduct(ctx, productId) {
   }
 
   try {
+    const displayLabel = productService.getProductDisplayLabel(product);
     // 1. Create order
     const order = await orderService.createOrder({
       buyerId: user.id,
       sellerId: product.sellerId,
       productId: product.id,
-      productName: product.name,
+      productName: displayLabel,
       quantity: 1,
       price: product.price,
     });
+
 
     // 2. Update status to waiting_payment
     await orderService.updateOrderStatus(order.id, 'waiting_payment');
