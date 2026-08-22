@@ -323,33 +323,69 @@ async function showAdminOrderDetail(ctx, orderId) {
 
 // ── Tickets Management ──
 
-async function showAdminTickets(ctx, page = 0) {
+async function showAdminTickets(ctx, filter = 'all', page = 0) {
   if (!requireAdmin(ctx)) return;
 
   const allTickets = ticketService.getAllTickets();
-  const activeTickets = allTickets.filter((t) => t.status !== 'closed');
+
+  // Exclude closed tickets; filter by tab
+  let filtered = allTickets.filter((t) => t.status !== 'closed');
+  if (filter === 'unread') {
+    filtered = filtered.filter((t) => t.readStatus === 'unread' && !t.chatActive);
+  } else if (filter === 'read') {
+    filtered = filtered.filter((t) => t.readStatus === 'read' && !t.chatActive);
+  } else if (filter === 'active') {
+    filtered = filtered.filter((t) => t.chatActive === true);
+  }
+
   const perPage = config.ITEMS_PER_PAGE;
-  const totalPages = Math.max(1, Math.ceil(activeTickets.length / perPage));
+  const totalPages = Math.max(1, Math.ceil(filtered.length / perPage));
   const currentPage = Math.min(page, totalPages - 1);
   const start = currentPage * perPage;
-  const pageTickets = activeTickets.slice(start, start + perPage);
+  const pageTickets = filtered.slice(start, start + perPage);
 
-  let text = `🎫 <b>TICKET AKTIF</b> (${activeTickets.length})\n\n`;
+  // Count badges
+  const allActive = allTickets.filter((t) => t.status !== 'closed');
+  const unreadCount = allActive.filter((t) => t.readStatus === 'unread' && !t.chatActive).length;
+  const readCount  = allActive.filter((t) => t.readStatus === 'read' && !t.chatActive).length;
+  const activeCount= allActive.filter((t) => t.chatActive === true).length;
 
-  if (activeTickets.length === 0) {
-    text += 'Belum ada ticket aktif.';
+  const filterLabel = filter === 'unread' ? '🔴 Belum Dibaca'
+    : filter === 'read'   ? '🟡 Sudah Dibaca'
+    : filter === 'active' ? '🟢 Sesi Aktif'
+    : '📋 Semua';
+
+  let text = `🎫 <b>TICKET ADMIN</b> — ${filterLabel} (${filtered.length})\n\n`;
+
+  if (filtered.length === 0) {
+    text += '<i>Tidak ada tiket di kategori ini.</i>';
   } else {
     pageTickets.forEach((t, i) => {
       const num = start + i + 1;
-      text += `<b>${num}.</b> #${t.id}\n`;
+      let statusIcon = t.chatActive ? '🟢' : (t.readStatus === 'unread' ? '🔴' : '🟡');
+      text += `<b>${num}.</b> ${statusIcon} #${t.id}\n`;
       if (t.orderId) text += `    Order: #${t.orderId}\n`;
-      text += `    ${formatTicketStatus(t.status)}\n\n`;
+      text += `\n`;
     });
   }
 
-  const buttons = pageTickets.map((t) => [
-    Markup.button.callback(`📋 #${t.id}`, `ticket_${t.id}`),
+  const buttons = [];
+
+  // Filter tab buttons
+  buttons.push([
+    Markup.button.callback(`🔴 Belum Dibaca${unreadCount > 0 ? ' (' + unreadCount + ')' : ''}`, `adm_tkt_filter_unread`),
+    Markup.button.callback(`🟡 Dibaca${readCount > 0 ? ' (' + readCount + ')' : ''}`, `adm_tkt_filter_read`),
   ]);
+  buttons.push([
+    Markup.button.callback(`🟢 Aktif${activeCount > 0 ? ' (' + activeCount + ')' : ''}`, `adm_tkt_filter_active`),
+    Markup.button.callback(`📋 Semua (${allActive.length})`, `adm_tkt_filter_all`),
+  ]);
+
+  // Ticket list buttons
+  pageTickets.forEach((t) => {
+    const icon = t.chatActive ? '🟢' : (t.readStatus === 'unread' ? '🔴' : '🟡');
+    buttons.push([Markup.button.callback(`${icon} #${t.id}`, `ticket_${t.id}`)]);
+  });
 
   if (totalPages > 1) {
     buttons.push(paginationRow('adm_tickets_page', currentPage, totalPages));
@@ -800,7 +836,34 @@ async function handleAdminInput(ctx) {
       return true;
     }
 
-    const { name, variant, categoryId, description, price } = session.data;
+    // Save stock then ask about order note
+    setAdminSession(ctx.from.id, {
+      ...session,
+      step: 'add_product_ask_note',
+      data: { ...session.data, stock },
+    });
+
+    await ctx.reply(
+      `📝 <b>Perlu catatan ketika order?</b>\n\n` +
+      `Contoh: "Silahkan masukan email untuk pengaktifan pro."`,
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [
+              Markup.button.callback('✅ Ya', 'adm_prod_note_yes'),
+              Markup.button.callback('❌ Tidak', 'adm_prod_note_no'),
+            ],
+          ],
+        },
+      }
+    );
+    return true;
+  }
+
+  if (session.step === 'add_product_note_prompt') {
+    const orderNotePrompt = text.trim();
+    const { name, variant, categoryId, description, price, stock } = session.data;
     clearAdminSession(ctx.from.id);
 
     const product = await productService.createProduct({
@@ -811,10 +874,11 @@ async function handleAdminInput(ctx) {
       price,
       stock,
       sellerId: null,
+      requireNote: true,
+      orderNotePrompt,
     });
 
     const displayLabel = productService.getProductDisplayLabel(product);
-
     const buttons = [
       [Markup.button.callback('➕ Tambah Varian Lain untuk Produk Ini', `adm_prod_add_var_${product.id}`)],
       [Markup.button.callback('🖼️ Upload Foto Produk', `adm_prod_photo_${product.id}`)],
@@ -827,7 +891,8 @@ async function handleAdminInput(ctx) {
       `<b>Produk:</b> ${escapeHtml(product.name)}\n` +
       `<b>Varian:</b> ${escapeHtml(displayLabel)}\n` +
       `<b>Harga:</b> ${formatCurrency(product.price)}\n` +
-      `<b>Stok:</b> ${product.stock}`,
+      `<b>Stok:</b> ${product.stock}\n` +
+      `<b>Catatan Order:</b> ✅ Aktif`,
       { parse_mode: 'HTML', reply_markup: { inline_keyboard: buttons } }
     );
     return true;
@@ -867,7 +932,34 @@ async function handleAdminInput(ctx) {
       return true;
     }
 
-    const { parentProduct, variant, price } = session.data;
+    // Save stock then ask about order note
+    setAdminSession(ctx.from.id, {
+      ...session,
+      step: 'add_variant_ask_note',
+      data: { ...session.data, stock },
+    });
+
+    await ctx.reply(
+      `📝 <b>Perlu catatan ketika order?</b>\n\n` +
+      `Contoh: "Silahkan masukan email untuk pengaktifan pro."`,
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [
+              Markup.button.callback('✅ Ya', 'adm_var_note_yes'),
+              Markup.button.callback('❌ Tidak', 'adm_var_note_no'),
+            ],
+          ],
+        },
+      }
+    );
+    return true;
+  }
+
+  if (session.step === 'add_variant_note_prompt') {
+    const orderNotePrompt = text.trim();
+    const { parentProduct, variant, price, stock } = session.data;
     clearAdminSession(ctx.from.id);
 
     const newProduct = await productService.createProduct({
@@ -879,10 +971,11 @@ async function handleAdminInput(ctx) {
       stock,
       sellerId: parentProduct.sellerId || null,
       image: parentProduct.image || null,
+      requireNote: true,
+      orderNotePrompt,
     });
 
     const displayLabel = productService.getProductDisplayLabel(newProduct);
-
     const buttons = [
       [Markup.button.callback('➕ Tambah Varian Lain Lagi', `adm_prod_add_var_${parentProduct.id}`)],
       [Markup.button.callback('✏️ Edit Varian Ini', `adm_prod_edit_${newProduct.id}`)],
@@ -895,7 +988,8 @@ async function handleAdminInput(ctx) {
       `<b>Produk:</b> ${escapeHtml(newProduct.name)}\n` +
       `<b>Varian:</b> ${escapeHtml(displayLabel)}\n` +
       `<b>Harga:</b> ${formatCurrency(newProduct.price)}\n` +
-      `<b>Stok:</b> ${newProduct.stock}`,
+      `<b>Stok:</b> ${newProduct.stock}\n` +
+      `<b>Catatan Order:</b> ✅ Aktif`,
       { parse_mode: 'HTML', reply_markup: { inline_keyboard: buttons } }
     );
     return true;
@@ -1492,6 +1586,13 @@ function register(bot) {
 
     const order = orderService.getOrderById(orderId);
     if (order) {
+      // Delete order notification messages sent to other admins
+      const notifMsgs = orderService.getAdminNotificationMessages(orderId);
+      if (notifMsgs && notifMsgs.length > 0) {
+        await messageService.deleteAdminNotificationMessages({ telegram: ctx.telegram }, notifMsgs, ctx.from.id);
+        await orderService.clearAdminNotificationMessages(orderId);
+      }
+
       const notifText =
         `🔔 <b>STATUS PAYMENT DIUPDATE</b>\n\n` +
         `Order #${orderId}\n` +
@@ -1520,12 +1621,122 @@ function register(bot) {
   // ── Tickets ──
   bot.action('admin_tickets', async (ctx) => {
     await ctx.answerCbQuery().catch(() => {});
-    await showAdminTickets(ctx, 0);
+    await showAdminTickets(ctx, 'all', 0);
+  });
+
+  bot.action(/^adm_tkt_filter_(all|unread|read|active)$/, async (ctx) => {
+    await ctx.answerCbQuery().catch(() => {});
+    const filter = ctx.match[1];
+    await showAdminTickets(ctx, filter, 0);
   });
 
   bot.action(/^adm_tickets_page_(\d+)$/, async (ctx) => {
     await ctx.answerCbQuery().catch(() => {});
-    await showAdminTickets(ctx, parseInt(ctx.match[1], 10));
+    await showAdminTickets(ctx, 'all', parseInt(ctx.match[1], 10));
+  });
+
+  // ── Product Note Callbacks ──
+  bot.action('adm_prod_note_yes', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => {});
+    if (!requireAdmin(ctx)) return;
+    const session = getAdminSession(ctx.from.id);
+    if (!session || session.step !== 'add_product_ask_note') return;
+    setAdminSession(ctx.from.id, { ...session, step: 'add_product_note_prompt' });
+    await ctx.reply(
+      `✏️ Silahkan masukan <b>teks catatan</b> yang akan ditampilkan ke pembeli saat order:\n\n` +
+      `<i>Contoh: "Silahkan masukan email untuk pengaktifan pro. Jika status order sudah selesai cek kembali pada email yang sudah dikirim oleh admin. Lalu silahkan terima"</i>`,
+      { parse_mode: 'HTML' }
+    );
+  });
+
+  bot.action('adm_prod_note_no', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => {});
+    if (!requireAdmin(ctx)) return;
+    const session = getAdminSession(ctx.from.id);
+    if (!session || session.step !== 'add_product_ask_note') return;
+    const { name, variant, categoryId, description, price, stock } = session.data;
+    clearAdminSession(ctx.from.id);
+
+    const product = await productService.createProduct({
+      name,
+      variant: variant || null,
+      categoryId,
+      description,
+      price,
+      stock,
+      sellerId: null,
+      requireNote: false,
+      orderNotePrompt: null,
+    });
+
+    const displayLabel = productService.getProductDisplayLabel(product);
+    const buttons = [
+      [Markup.button.callback('➕ Tambah Varian Lain untuk Produk Ini', `adm_prod_add_var_${product.id}`)],
+      [Markup.button.callback('🖼️ Upload Foto Produk', `adm_prod_photo_${product.id}`)],
+      [Markup.button.callback('📦 Lihat Semua Produk', 'admin_products')],
+    ];
+
+    await ctx.reply(
+      `✅ <b>Produk berhasil ditambahkan!</b>\n\n` +
+      `<b>ID:</b> ${product.id}\n` +
+      `<b>Produk:</b> ${escapeHtml(product.name)}\n` +
+      `<b>Varian:</b> ${escapeHtml(displayLabel)}\n` +
+      `<b>Harga:</b> ${formatCurrency(product.price)}\n` +
+      `<b>Stok:</b> ${product.stock}`,
+      { parse_mode: 'HTML', reply_markup: { inline_keyboard: buttons } }
+    );
+  });
+
+  // ── Variant Note Callbacks ──
+  bot.action('adm_var_note_yes', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => {});
+    if (!requireAdmin(ctx)) return;
+    const session = getAdminSession(ctx.from.id);
+    if (!session || session.step !== 'add_variant_ask_note') return;
+    setAdminSession(ctx.from.id, { ...session, step: 'add_variant_note_prompt' });
+    await ctx.reply(
+      `✏️ Silahkan masukan <b>teks catatan</b> yang akan ditampilkan ke pembeli saat order:`,
+      { parse_mode: 'HTML' }
+    );
+  });
+
+  bot.action('adm_var_note_no', async (ctx) => {
+    await ctx.answerCbQuery().catch(() => {});
+    if (!requireAdmin(ctx)) return;
+    const session = getAdminSession(ctx.from.id);
+    if (!session || session.step !== 'add_variant_ask_note') return;
+    const { parentProduct, variant, price, stock } = session.data;
+    clearAdminSession(ctx.from.id);
+
+    const newProduct = await productService.createProduct({
+      name: parentProduct.name,
+      variant,
+      categoryId: parentProduct.categoryId,
+      description: parentProduct.description,
+      price,
+      stock,
+      sellerId: parentProduct.sellerId || null,
+      image: parentProduct.image || null,
+      requireNote: false,
+      orderNotePrompt: null,
+    });
+
+    const displayLabel = productService.getProductDisplayLabel(newProduct);
+    const buttons = [
+      [Markup.button.callback('➕ Tambah Varian Lain Lagi', `adm_prod_add_var_${parentProduct.id}`)],
+      [Markup.button.callback('✏️ Edit Varian Ini', `adm_prod_edit_${newProduct.id}`)],
+      [Markup.button.callback('📦 Lihat Semua Produk', 'admin_products')],
+    ];
+
+    await ctx.reply(
+      `✅ <b>Varian baru berhasil ditambahkan!</b>\n\n` +
+      `<b>ID:</b> ${newProduct.id}\n` +
+      `<b>Produk:</b> ${escapeHtml(newProduct.name)}\n` +
+      `<b>Varian:</b> ${escapeHtml(displayLabel)}\n` +
+      `<b>Harga:</b> ${formatCurrency(newProduct.price)}\n` +
+      `<b>Stok:</b> ${newProduct.stock}`,
+      { parse_mode: 'HTML', reply_markup: { inline_keyboard: buttons } }
+    );
   });
 
   // ── Users ──

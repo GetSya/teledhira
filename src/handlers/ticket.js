@@ -101,6 +101,17 @@ async function showTicketDetail(ctx, ticketId) {
     return;
   }
 
+  let statusLabel = formatTicketStatus(ticket.status);
+  if (ticket.status !== 'closed') {
+    if (ticket.chatActive) {
+      statusLabel = '🟢 Sesi Chat Aktif';
+    } else if (ticket.readStatus === 'read') {
+      statusLabel = '🟡 Sudah Dibaca (Menunggu Chat)';
+    } else {
+      statusLabel = '🔴 Belum Dibaca';
+    }
+  }
+
   let text = `🎫 <b>TICKET #${ticket.id}</b>\n\n`;
 
   if (ticket.orderId) {
@@ -109,31 +120,62 @@ async function showTicketDetail(ctx, ticketId) {
       text += `<b>Order:</b> #${order.id}\n`;
       text += `<b>Produk:</b> ${escapeHtml(order.productName)}\n`;
       text += `<b>Total:</b> ${formatCurrency(order.total)}\n`;
+      if (order.note) {
+        text += `<b>Catatan:</b> <code>${escapeHtml(order.note)}</code>\n`;
+      }
       text += `<b>Status Order:</b> ${formatOrderStatus(order.status)}\n\n`;
     }
   }
 
   if (ticket.type === 'support') {
     text += `<b>Tipe:</b> 📞 Support\n`;
-    text += `<b>Kategori:</b> ${escapeHtml(ticket.category)}\n\n`;
+    text += `<b>Kategori:</b> ${escapeHtml(ticket.category || '-')}\n\n`;
   }
 
-  text += `<b>Status Ticket:</b> ${formatTicketStatus(ticket.status)}\n`;
-  text += `<b>Dibuat:</b> ${formatDate(ticket.createdAt)}\n`;
+  const buyerUser = userService.getUserById(ticket.buyerId);
+  if (isAdmin && buyerUser) {
+    text += `<b>Buyer:</b> ${escapeHtml(buyerUser.firstName || buyerUser.username || '-')} (<code>${buyerUser.telegramId}</code>)\n`;
+  }
 
-  if (ticket.status !== 'closed') {
-    text += `\nSesi percakapan aktif. Pesan yang Anda kirim akan langsung diteruskan.`;
+  text += `<b>Status:</b> ${statusLabel}\n`;
+  text += `<b>Dibuat:</b> ${formatDate(ticket.createdAt)}\n\n`;
+
+  if (ticket.status === 'closed') {
+    text += `🔒 <i>Ticket ini telah ditutup.</i>`;
+  } else if (!ticket.chatActive) {
+    if (isAdmin) {
+      text += `👉 <i>Tekan tombol <b>"💬 Mulai Chat ke User"</b> untuk memulai sesi percakapan dengan pembeli.</i>`;
+    } else {
+      text += `⏳ <i>Sesi percakapan belum dibuka oleh Admin/Owner. Mohon tunggu respon admin.</i>`;
+    }
+  } else {
+    text += `💬 <i>Sesi percakapan aktif. Pesan yang Anda ketik langsung diteruskan ke lawan bicara.</i>`;
   }
 
   const buttons = [];
 
   if (ticket.status !== 'closed') {
-    buttons.push([Markup.button.callback('💬 Sesi Chat Aktif', `ticket_open_${ticket.id}`)]);
+    if (isAdmin || (user.role === 'seller' && ticket.sellerId === user.id)) {
+      if (!ticket.chatActive) {
+        buttons.push([Markup.button.callback('💬 Mulai Chat ke User', `ticket_start_chat_${ticket.id}`)]);
+        if (ticket.readStatus === 'unread') {
+          buttons.push([Markup.button.callback('👁️ Tandai Sudah Dibaca', `ticket_ack_${ticket.id}`)]);
+        }
+      } else {
+        buttons.push([Markup.button.callback('💬 Masuk ke Sesi Chat', `ticket_open_${ticket.id}`)]);
+      }
+    } else {
+      // Buyer view
+      if (ticket.chatActive) {
+        buttons.push([Markup.button.callback('💬 Masuk Chat', `ticket_open_${ticket.id}`)]);
+      }
+    }
+
     buttons.push([Markup.button.callback('❌ Tutup Ticket', `ticket_close_${ticket.id}`)]);
   }
 
   if (ticket.orderId) {
-    buttons.push([Markup.button.callback('📦 Lihat Order', `order_${ticket.orderId}`)]);
+    buttons.push([Markup.button.callback('📦 Lihat Detail Order', `order_${ticket.orderId}`)]);
 
     if (isAdmin || (user.role === 'seller' && ticket.sellerId === user.id)) {
       buttons.push([
@@ -143,13 +185,90 @@ async function showTicketDetail(ctx, ticketId) {
     }
   }
 
-  buttons.push(navRow('my_tickets'));
+  const backTarget = isAdmin ? 'admin_tickets' : 'my_tickets';
+  buttons.push(navRow(backTarget));
 
   return safeEditOrReply(ctx, text, { reply_markup: { inline_keyboard: buttons } });
 }
 
 /**
- * Open/activate ticket for chat relay (2-way automatic connection)
+ * Start ticket chat initiated by Admin / Owner
+ */
+async function startTicketChat(ctx, ticketId) {
+  const user = userService.findByTelegramId(ctx.from.id);
+  if (!user) return;
+
+  const ticket = ticketService.getTicketById(ticketId);
+  if (!ticket) {
+    await ctx.answerCbQuery('Ticket tidak ditemukan.');
+    return;
+  }
+
+  if (ticket.status === 'closed') {
+    await ctx.answerCbQuery('Ticket sudah ditutup.');
+    return;
+  }
+
+  const isAdmin = userService.isAdmin(ctx.from.id);
+  if (!isAdmin && ticket.sellerId !== user.id) {
+    await ctx.answerCbQuery('Hanya Admin atau Penjual yang dapat memulai sesi chat.');
+    return;
+  }
+
+  // 1. Update ticket in DB
+  await ticketService.startTicketChat(ticketId);
+
+  // 2. Set active ticket for Admin/Owner
+  setActiveTicket(ctx.from.id, ticketId);
+
+  // 3. Connect Buyer and notify them
+  const buyerUser = userService.getUserById(ticket.buyerId);
+  if (buyerUser && buyerUser.telegramId) {
+    setActiveTicket(buyerUser.telegramId, ticketId);
+
+    const buyerNotifText =
+      `💬 <b>SESI CHAT TIKET #${ticket.id} TELAH DIMULAI!</b>\n\n` +
+      `Admin telah membuka percakapan.\n` +
+      `Anda sekarang dapat langsung mengetik pesan di sini untuk berbicara dengan Admin/Owner.`;
+
+    const buyerButtons = [
+      [Markup.button.callback('❌ Tutup Ticket', `ticket_close_${ticket.id}`)],
+      [Markup.button.callback('🏠 Menu Utama', 'menu_main')],
+    ];
+
+    await messageService.sendToUser(
+      { telegram: ctx.telegram },
+      buyerUser.telegramId,
+      buyerNotifText,
+      { reply_markup: { inline_keyboard: buyerButtons } }
+    );
+  }
+
+  // 4. If linked to an order, delete order notifications for other admins
+  if (ticket.orderId) {
+    const notifMsgs = orderService.getAdminNotificationMessages(ticket.orderId);
+    await messageService.deleteAdminNotificationMessages({ telegram: ctx.telegram }, notifMsgs, ctx.from.id);
+    await orderService.clearAdminNotificationMessages(ticket.orderId);
+  }
+
+  await ctx.answerCbQuery('Sesi chat berhasil dimulai!').catch(() => {});
+
+  const adminText =
+    `💬 <b>SESI CHAT TIKET #${ticket.id} AKTIF</b>\n\n` +
+    `Anda terhubung langsung dengan buyer (<b>${escapeHtml(buyerUser ? buyerUser.firstName || buyerUser.username : 'Buyer')}</b>).\n` +
+    `Silakan ketik pesan langsung di sini untuk mengirim pesan ke pembeli.`;
+
+  const adminButtons = [
+    [Markup.button.callback('❌ Tutup Ticket / Selesai', `ticket_close_${ticket.id}`)],
+    [Markup.button.callback('🔚 Keluar Mode Chat', `ticket_deactivate_${ticket.id}`)],
+    [Markup.button.callback('🏠 Menu Utama', 'menu_main')],
+  ];
+
+  return safeEditOrReply(ctx, adminText, { reply_markup: { inline_keyboard: adminButtons } });
+}
+
+/**
+ * Open/activate existing ticket for chat relay
  */
 async function openTicketChat(ctx, ticketId) {
   const user = userService.findByTelegramId(ctx.from.id);
@@ -172,49 +291,8 @@ async function openTicketChat(ctx, ticketId) {
     return;
   }
 
-  // 1. Activate active ticket session for the user who clicked
+  // Activate active ticket session for the user who clicked
   setActiveTicket(ctx.from.id, ticketId);
-
-  const openerName = escapeHtml(user.firstName || user.username || (isAdmin ? 'Admin' : 'User'));
-
-  // 2. Activate active ticket session for opponent user (Buyer or Seller/Admin)
-  let opponentUserId = null;
-  if (user.id === ticket.buyerId) {
-    opponentUserId = ticket.sellerId || ticket.assignedAdminId;
-  } else {
-    opponentUserId = ticket.buyerId;
-  }
-
-  if (opponentUserId) {
-    const opponentUser = userService.getUserById(opponentUserId);
-    if (opponentUser && opponentUser.telegramId) {
-      setActiveTicket(opponentUser.telegramId, ticketId);
-
-      const notifText =
-        `💬 <b>SESI CHAT TICKET #${ticket.id} DIBUKA</b>\n\n` +
-        `<b>${openerName}</b> telah membuka sesi chat.\n` +
-        `Kalian berdua sekarang terhubung! Silakan ketik pesan langsung di sini untuk berkirim pesan secara 2-arah.`;
-
-      const notifButtons = [
-        [Markup.button.callback('❌ Tutup Ticket', `ticket_close_${ticket.id}`)],
-        [Markup.button.callback('🏠 Menu Utama', 'menu_main')],
-      ];
-
-      await messageService.sendToUser(
-        { telegram: ctx.telegram },
-        opponentUser.telegramId,
-        notifText,
-        { reply_markup: { inline_keyboard: notifButtons } }
-      );
-    }
-  } else if (user.id === ticket.buyerId) {
-    // If buyer opened support ticket and no specific seller assigned, activate for super admins
-    for (const adminId of config.ADMIN_IDS) {
-      if (adminId !== ctx.from.id) {
-        setActiveTicket(adminId, ticketId);
-      }
-    }
-  }
 
   const text =
     `💬 <b>SESI CHAT TICKET #${ticket.id} AKTIF</b>\n\n` +
@@ -241,7 +319,7 @@ async function waitTicketChat(ctx, ticketId) {
     `Anda dapat membuka sesi chat kapan saja dengan menekan tombol di bawah.`;
 
   const buttons = [
-    [Markup.button.callback('💬 Langsung Sesi Chat', `ticket_open_${ticketId}`)],
+    [Markup.button.callback('💬 Mulai Chat ke User', `ticket_start_chat_${ticketId}`)],
     [Markup.button.callback('🏠 Menu Utama', 'menu_main')],
   ];
 
@@ -284,10 +362,10 @@ async function closeTicket(ctx, ticketId) {
     }
   }
 
-  const closerRole = ticket.buyerId === user.id ? 'Buyer' : 'Seller/Admin';
+  const closerRole = ticket.buyerId === user.id ? 'Buyer' : 'Admin';
   const notifText =
     `🔔 <b>TICKET DITUTUP</b>\n\n` +
-    `Ticket #${ticketId} telah ditutup oleh ${closerRole}.`;
+    `Ticket #${ticketId} telah ditutup oleh ${closerRole}. Sesi percakapan berakhir.`;
 
   if (ticket.buyerId === user.id) {
     await messageService.notifyTicketHandler({ telegram: ctx.telegram }, ticket, notifText);
@@ -335,6 +413,14 @@ async function handleTicketMessage(ctx, bot) {
   const user = userService.findByTelegramId(telegramId);
   if (!user) return false;
 
+  const isBuyer = ticket.buyerId === user.id;
+
+  // If buyer tries to message before admin starts chat session
+  if (isBuyer && !ticket.chatActive) {
+    await ctx.reply('⏳ Sesi percakapan belum dibuka oleh Admin/Owner. Mohon tunggu respon dari admin.');
+    return true;
+  }
+
   await ticketService.addMessage({
     ticketId: activeTicketId,
     senderId: user.id,
@@ -343,9 +429,6 @@ async function handleTicketMessage(ctx, bot) {
     messageType: 'text',
   });
 
-  const isBuyer = ticket.buyerId === user.id;
-
-  // Direct clean message relay (no headers/details as requested)
   const cleanMessage = escapeHtml(text);
 
   if (isBuyer) {
@@ -471,6 +554,20 @@ function register(bot) {
     await showTicketDetail(ctx, ticketId);
   });
 
+  // Owner/Admin acknowledge notification button ("Paham")
+  bot.action(/^ticket_ack_(TKT-\d+|TKT-SUP-\d+)$/, async (ctx) => {
+    const ticketId = ctx.match[1];
+    await ticketService.markTicketRead(ticketId);
+    await ctx.deleteMessage().catch(() => {});
+    await ctx.answerCbQuery('Notifikasi dipahami & tiket ditandai sudah dibaca.').catch(() => {});
+  });
+
+  // Owner/Admin initiate chat
+  bot.action(/^ticket_start_chat_(TKT-\d+|TKT-SUP-\d+)$/, async (ctx) => {
+    const ticketId = ctx.match[1];
+    await startTicketChat(ctx, ticketId);
+  });
+
   bot.action(/^ticket_open_(TKT-\d+|TKT-SUP-\d+)$/, async (ctx) => {
     await ctx.answerCbQuery().catch(() => {});
     const ticketId = ctx.match[1];
@@ -499,6 +596,7 @@ module.exports = {
   getActiveTicket,
   setActiveTicket,
   clearActiveTicket,
+  startTicketChat,
   replyMapping,
   showMyTickets,
   showTicketDetail,

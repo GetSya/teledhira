@@ -53,18 +53,47 @@ async function notifySeller(bot, sellerId, text, extra = {}) {
 }
 
 /**
- * Notify all admins
+ * Notify all admins and track sent message IDs
  * @param {object} bot
  * @param {string} text
  * @param {object} [extra]
+ * @returns {Promise<Array<{telegramId: number, messageId: number}>>}
  */
 async function notifyAdmins(bot, text, extra = {}) {
   const results = [];
   for (const adminTelegramId of config.ADMIN_IDS) {
     const result = await sendToUser(bot, adminTelegramId, text, extra);
-    results.push(result);
+    if (result && result.message_id) {
+      results.push({
+        telegramId: adminTelegramId,
+        messageId: result.message_id,
+      });
+    }
   }
   return results;
+}
+
+/**
+ * Delete admin notification messages across all admins (except optionally one)
+ * @param {object} bot
+ * @param {Array<{telegramId: number, messageId: number}>} messages
+ * @param {number|null} [keepTelegramId] - If provided, messages for this telegramId won't be deleted
+ */
+async function deleteAdminNotificationMessages(bot, messages, keepTelegramId = null) {
+  if (!Array.isArray(messages) || messages.length === 0) return;
+
+  for (const item of messages) {
+    if (keepTelegramId && item.telegramId === keepTelegramId) {
+      continue;
+    }
+    try {
+      if (bot.telegram && typeof bot.telegram.deleteMessage === 'function') {
+        await bot.telegram.deleteMessage(item.telegramId, item.messageId).catch(() => {});
+      }
+    } catch (e) {
+      logger.warn(`Failed to delete admin notification message ${item.messageId} for ${item.telegramId}: ${e.message}`);
+    }
+  }
 }
 
 /**
@@ -90,7 +119,7 @@ async function notifyTicketHandler(bot, ticket, text, extra = {}) {
 
   // Otherwise notify all admins
   const results = await notifyAdmins(bot, text, extra);
-  return results.find((r) => r !== null) || null;
+  return results.length > 0 ? results[0] : null;
 }
 
 module.exports = {
@@ -98,5 +127,6 @@ module.exports = {
   notifyBuyer,
   notifySeller,
   notifyAdmins,
+  deleteAdminNotificationMessages,
   notifyTicketHandler,
 };

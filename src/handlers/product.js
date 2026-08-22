@@ -111,8 +111,47 @@ async function showProductDetail(ctx, productId) {
   }
 }
 
+// In-memory buyer session for order notes
+const buyerSessions = new Map();
+
+function getBuyerSession(telegramId) {
+  return buyerSessions.get(telegramId) || null;
+}
+
+function setBuyerSession(telegramId, data) {
+  buyerSessions.set(telegramId, data);
+}
+
+function clearBuyerSession(telegramId) {
+  buyerSessions.delete(telegramId);
+}
+
 /**
- * Buy product directly → create order + ticket & auto-activate chat session
+ * Handle buyer text input (e.g. order note)
+ */
+async function handleBuyerInput(ctx) {
+  const session = getBuyerSession(ctx.from.id);
+  if (!session) return false;
+
+  if (session.step === 'buyer_order_note') {
+    const product = productService.getProductById(session.productId);
+    if (!product) {
+      clearBuyerSession(ctx.from.id);
+      await ctx.reply('❌ Produk tidak ditemukan atau telah dihapus.');
+      return true;
+    }
+
+    const note = ctx.message.text.trim();
+    clearBuyerSession(ctx.from.id);
+    await processOrderCreation(ctx, product, note);
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Buy product directly → check if note is required or process directly
  */
 async function buyProduct(ctx, productId) {
   const product = productService.getProductById(productId);
@@ -132,8 +171,44 @@ async function buyProduct(ctx, productId) {
     return;
   }
 
+  // If product requires a note, prompt the buyer first
+  if (product.requireNote) {
+    setBuyerSession(ctx.from.id, {
+      step: 'buyer_order_note',
+      productId: product.id,
+    });
+
+    const displayLabel = productService.getProductDisplayLabel(product);
+    const promptText = product.orderNotePrompt || 'Silahkan masukan Catatan nya:';
+
+    const text =
+      `📝 <b>CATATAN PESANAN DIPERLUKAN</b>\n\n` +
+      `<b>Produk:</b> ${escapeHtml(displayLabel)}\n` +
+      `<b>Harga:</b> ${formatCurrency(product.price)}\n\n` +
+      `<i>${escapeHtml(promptText)}</i>\n\n` +
+      `Silakan kirim pesan balasan catatan Anda di bawah ini:`;
+
+    const buttons = [
+      [Markup.button.callback('❌ Batal Pesan', `cancel_order_note_${product.id}`)],
+    ];
+
+    return safeEditOrReply(ctx, text, { reply_markup: { inline_keyboard: buttons } });
+  }
+
+  // Otherwise proceed without note
+  await processOrderCreation(ctx, product, null);
+}
+
+/**
+ * Execute order creation and notify admins
+ */
+async function processOrderCreation(ctx, product, note = null) {
+  const user = userService.findByTelegramId(ctx.from.id);
+  if (!user) return;
+
   try {
     const displayLabel = productService.getProductDisplayLabel(product);
+
     // 1. Create order
     const order = await orderService.createOrder({
       buyerId: user.id,
@@ -142,8 +217,8 @@ async function buyProduct(ctx, productId) {
       productName: displayLabel,
       quantity: 1,
       price: product.price,
+      note: note || null,
     });
-
 
     // 2. Update status to waiting_payment
     await orderService.updateOrderStatus(order.id, 'waiting_payment');
@@ -151,7 +226,7 @@ async function buyProduct(ctx, productId) {
     // 3. Decrease stock
     await productService.decreaseStock(product.id, 1);
 
-    // 4. Create ticket
+    // 4. Create ticket (starts with readStatus: unread, chatActive: false)
     const ticket = await ticketService.createTicket({
       orderId: order.id,
       buyerId: user.id,
@@ -161,18 +236,16 @@ async function buyProduct(ctx, productId) {
     // 5. Link ticket
     await orderService.setTicketId(order.id, ticket.id);
 
-    // 6. Auto-activate ticket chat session for buyer
-    ticketHandler.setActiveTicket(ctx.from.id, ticket.id);
-
-    // 7. Show confirmation to buyer
+    // 6. Show confirmation to buyer
     const text =
       `✅ <b>ORDER BERHASIL DIBUAT</b>\n\n` +
       `<b>Order:</b> #${order.id}\n` +
-      `<b>Produk:</b> ${escapeHtml(product.name)}\n` +
+      `<b>Produk:</b> ${escapeHtml(order.productName)}\n` +
       `<b>Total:</b> ${formatCurrency(order.total)}\n` +
-      `<b>Status:</b> ⏳ Menunggu Pembayaran\n\n` +
-      `💬 <b>Sesi Chat Tiket #${ticket.id} Otomatis Aktif!</b>\n` +
-      `Anda dapat langsung mengetik pesan di sini untuk berbicara dengan penjual/admin.`;
+      (note ? `<b>📝 Catatan Anda:</b> <code>${escapeHtml(note)}</code>\n` : '') +
+      `<b>Status:</b> ⏳ Menunggu Pembayaran\n` +
+      `<b>Ticket:</b> #${ticket.id}\n\n` +
+      `⏳ <i>Tiket telah dibuat. Sesi chat akan dimulai setelah Admin/Owner merespon.</i>`;
 
     const buttons = [
       [Markup.button.callback('💳 Saya Sudah Bayar', `order_pay_${order.id}`)],
@@ -182,20 +255,21 @@ async function buyProduct(ctx, productId) {
 
     await safeEditOrReply(ctx, text, { reply_markup: { inline_keyboard: buttons } });
 
-    // 8. Notify seller/admin with Session Option & Quick Payment Buttons
+    // 7. Notify seller/admin with Paham, Mulai Chat, & Quick Payment Buttons
     const notifText =
       `🔔 <b>ORDER BARU MASUK!</b>\n\n` +
       `<b>Order:</b> #${order.id}\n` +
-      `<b>Produk:</b> ${escapeHtml(product.name)}\n` +
+      `<b>Produk:</b> ${escapeHtml(order.productName)}\n` +
       `<b>Total:</b> ${formatCurrency(order.total)}\n` +
       `<b>Buyer:</b> ${escapeHtml(user.firstName || user.username)}\n` +
+      (note ? `<b>📝 Catatan Buyer:</b>\n<code>${escapeHtml(note)}</code>\n\n` : '\n') +
       `<b>Ticket:</b> #${ticket.id}\n\n` +
-      `Pilih tindakan penanganan tiket:`;
+      `Pilih tindakan penanganan:`;
 
     const notifButtons = [
       [
-        Markup.button.callback('💬 Langsung Sesi Chat', `ticket_open_${ticket.id}`),
-        Markup.button.callback('⏳ Tunggu Dulu', `ticket_wait_${ticket.id}`),
+        Markup.button.callback('👁️ Paham', `ticket_ack_${ticket.id}`),
+        Markup.button.callback('💬 Mulai Chat', `ticket_start_chat_${ticket.id}`),
       ],
       [
         Markup.button.callback('✅ Payment Berhasil', `adm_quick_pay_${order.id}_paid`),
@@ -203,17 +277,24 @@ async function buyProduct(ctx, productId) {
       ],
     ];
 
-    await messageService.notifyTicketHandler(
+    const sentAdmins = await messageService.notifyAdmins(
       { telegram: ctx.telegram },
-      ticket,
       notifText,
       { reply_markup: { inline_keyboard: notifButtons } }
     );
 
+    if (Array.isArray(sentAdmins) && sentAdmins.length > 0) {
+      await orderService.setAdminNotificationMessages(order.id, sentAdmins);
+    }
+
     logger.info(`Order ${order.id} created by ${user.id}, ticket ${ticket.id}`);
   } catch (err) {
     logger.error(`Buy product error: ${err.message}`);
-    await ctx.answerCbQuery('Terjadi kesalahan. Silakan coba lagi.');
+    if (ctx.callbackQuery) {
+      await ctx.answerCbQuery('Terjadi kesalahan. Silakan coba lagi.');
+    } else {
+      await ctx.reply('❌ Terjadi kesalahan. Silakan coba lagi.');
+    }
   }
 }
 
@@ -229,6 +310,13 @@ function register(bot) {
     const productId = ctx.match[1];
     await buyProduct(ctx, productId);
   });
+
+  bot.action(/^cancel_order_note_(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery('Pemesanan dibatalkan.').catch(() => {});
+    clearBuyerSession(ctx.from.id);
+    const productId = ctx.match[1];
+    await showProductDetail(ctx, productId);
+  });
 }
 
-module.exports = { register, showProductDetail };
+module.exports = { register, showProductDetail, buyProduct, handleBuyerInput, clearBuyerSession };

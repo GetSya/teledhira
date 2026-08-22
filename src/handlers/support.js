@@ -44,7 +44,7 @@ async function createSupportTicket(ctx, category) {
   if (!user) return;
 
   const catInfo = SUPPORT_CATEGORIES.find((c) => c.id === category);
-  const catLabel = catInfo ? catLabel.label : category;
+  const catLabel = catInfo ? catInfo.label : category;
 
   try {
     const ticket = await ticketService.createSupportTicket({
@@ -52,14 +52,11 @@ async function createSupportTicket(ctx, category) {
       category,
     });
 
-    setActiveTicket(ctx.from.id, ticket.id);
-
     const text =
       `🎫 <b>TICKET SUPPORT DIBUAT</b>\n\n` +
       `<b>Ticket:</b> #${ticket.id}\n` +
       `<b>Kategori:</b> ${catLabel}\n\n` +
-      `Silakan kirim pesan di chat ini.\n` +
-      `Pesan Anda akan diteruskan kepada admin.`;
+      `⏳ <i>Tiket telah dikirim ke Admin/Owner. Sesi chat akan dimulai setelah Admin membuka percakapan.</i>`;
 
     const buttons = [
       [Markup.button.callback('❌ Tutup Ticket', `ticket_close_${ticket.id}`)],
@@ -69,13 +66,22 @@ async function createSupportTicket(ctx, category) {
     await safeEditOrReply(ctx, text, { reply_markup: { inline_keyboard: buttons } });
 
     const notifText =
-      `🔔 <b>TICKET SUPPORT BARU</b>\n\n` +
+      `🔔 <b>TICKET SUPPORT BARU!</b>\n\n` +
       `<b>Ticket:</b> #${ticket.id}\n` +
       `<b>Kategori:</b> ${catLabel}\n` +
       `<b>User:</b> ${escapeHtml(user.firstName || user.username)}\n\n` +
-      `Balas pesan dari ticket untuk berkomunikasi dengan user.`;
+      `Pilih tindakan:`;
 
-    await messageService.notifyAdmins({ telegram: ctx.telegram }, notifText);
+    const notifButtons = [
+      [
+        Markup.button.callback('👁️ Paham', `ticket_ack_${ticket.id}`),
+        Markup.button.callback('💬 Mulai Chat', `ticket_start_chat_${ticket.id}`),
+      ],
+    ];
+
+    await messageService.notifyAdmins({ telegram: ctx.telegram }, notifText, {
+      reply_markup: { inline_keyboard: notifButtons },
+    });
 
     logger.info(`Support ticket ${ticket.id} created by ${user.id}`);
   } catch (err) {

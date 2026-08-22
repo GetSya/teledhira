@@ -9,7 +9,7 @@ const logger = require('../utils/logger');
 
 /**
  * Create a new product
- * @param {object} data - { name, categoryId, description, price, stock, sellerId, image, duration, variant }
+ * @param {object} data - { name, categoryId, description, price, stock, sellerId, image, duration, variant, requireNote, orderNotePrompt }
  * @returns {Promise<object>}
  */
 async function createProduct(data) {
@@ -22,6 +22,8 @@ async function createProduct(data) {
     description: data.description || '',
     price: Number(data.price) || 0,
     stock: Number(data.stock) || 0,
+    requireNote: Boolean(data.requireNote),
+    orderNotePrompt: data.orderNotePrompt || null,
     status: 'active',
     sellerId: data.sellerId || null,
     image: data.image || null,
@@ -75,7 +77,7 @@ function getAllProducts() {
  * @returns {Promise<object|null>}
  */
 async function updateProduct(id, updates) {
-  const allowedFields = ['name', 'categoryId', 'description', 'price', 'stock', 'status', 'sellerId', 'image', 'duration', 'variant'];
+  const allowedFields = ['name', 'categoryId', 'description', 'price', 'stock', 'status', 'sellerId', 'image', 'duration', 'variant', 'requireNote', 'orderNotePrompt'];
   const sanitized = {};
   for (const [key, val] of Object.entries(updates)) {
     if (allowedFields.includes(key)) {

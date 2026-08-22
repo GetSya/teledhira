@@ -33,7 +33,7 @@ function isValidTransition(from, to) {
 
 /**
  * Create a new order
- * @param {object} data - { buyerId, sellerId, productId, productName, quantity, price }
+ * @param {object} data - { buyerId, sellerId, productId, productName, quantity, price, note }
  * @returns {Promise<object>}
  */
 async function createOrder(data) {
@@ -48,8 +48,10 @@ async function createOrder(data) {
     quantity: Number(data.quantity) || 1,
     price: Number(data.price) || 0,
     total,
+    note: data.note || null,
     status: 'pending',
     ticketId: null,
+    adminNotificationMessages: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   }));
@@ -94,6 +96,35 @@ async function updateOrderStatus(orderId, newStatus) {
  */
 async function setTicketId(orderId, ticketId) {
   return database.update('orders', { id: orderId }, { ticketId });
+}
+
+/**
+ * Set admin notification messages on an order
+ * @param {string} orderId
+ * @param {Array<{telegramId: number, messageId: number}>} messages
+ * @returns {Promise<object|null>}
+ */
+async function setAdminNotificationMessages(orderId, messages) {
+  return database.update('orders', { id: orderId }, { adminNotificationMessages: messages || [] });
+}
+
+/**
+ * Get admin notification messages for an order
+ * @param {string} orderId
+ * @returns {Array}
+ */
+function getAdminNotificationMessages(orderId) {
+  const order = database.findById('orders', orderId);
+  return (order && Array.isArray(order.adminNotificationMessages)) ? order.adminNotificationMessages : [];
+}
+
+/**
+ * Clear admin notification messages for an order
+ * @param {string} orderId
+ * @returns {Promise<object|null>}
+ */
+async function clearAdminNotificationMessages(orderId) {
+  return database.update('orders', { id: orderId }, { adminNotificationMessages: [] });
 }
 
 /**
@@ -150,6 +181,9 @@ module.exports = {
   createOrder,
   updateOrderStatus,
   setTicketId,
+  setAdminNotificationMessages,
+  getAdminNotificationMessages,
+  clearAdminNotificationMessages,
   getOrderById,
   getOrdersByBuyer,
   getOrdersBySeller,

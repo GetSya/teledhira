@@ -21,6 +21,8 @@ async function createTicket(data) {
     assignedAdminId: null,
     category: null,
     status: 'open',
+    readStatus: 'unread',
+    chatActive: false,
     createdAt: new Date().toISOString(),
     closedAt: null,
   }));
@@ -44,6 +46,8 @@ async function createSupportTicket(data) {
     assignedAdminId: null,
     category: data.category || 'other',
     status: 'open',
+    readStatus: 'unread',
+    chatActive: false,
     createdAt: new Date().toISOString(),
     closedAt: null,
   }));
@@ -60,12 +64,35 @@ async function createSupportTicket(data) {
 async function closeTicket(ticketId) {
   const updated = await database.update('tickets', { id: ticketId }, {
     status: 'closed',
+    chatActive: false,
     closedAt: new Date().toISOString(),
   });
   if (updated) {
     logger.info(`Ticket closed: ${ticketId}`);
   }
   return updated;
+}
+
+/**
+ * Mark a ticket as read by admin/owner
+ * @param {string} ticketId
+ * @returns {Promise<object|null>}
+ */
+async function markTicketRead(ticketId) {
+  return database.update('tickets', { id: ticketId }, { readStatus: 'read' });
+}
+
+/**
+ * Start chat session for a ticket (initiated by admin/owner)
+ * @param {string} ticketId
+ * @returns {Promise<object|null>}
+ */
+async function startTicketChat(ticketId) {
+  return database.update('tickets', { id: ticketId }, {
+    readStatus: 'read',
+    chatActive: true,
+    status: 'processing',
+  });
 }
 
 /**
@@ -78,6 +105,7 @@ async function updateTicketStatus(ticketId, status) {
   const updates = { status };
   if (status === 'closed') {
     updates.closedAt = new Date().toISOString();
+    updates.chatActive = false;
   }
   return database.update('tickets', { id: ticketId }, updates);
 }
@@ -121,7 +149,7 @@ async function addMessage(data) {
   // Update ticket status to processing if it was open/waiting
   const ticket = database.findById('tickets', data.ticketId);
   if (ticket && (ticket.status === 'open' || ticket.status === 'waiting')) {
-    await database.update('tickets', { id: data.ticketId }, { status: 'processing' });
+    await database.update('tickets', { id: data.ticketId }, { status: 'processing', readStatus: 'read' });
   }
 
   return msg;
@@ -169,11 +197,50 @@ function getAllTickets() {
 }
 
 /**
- * Get open tickets
+ * Get open (non-closed) tickets
  * @returns {Array}
  */
 function getOpenTickets() {
   return database.find('tickets').filter((t) => t.status !== 'closed');
+}
+
+/**
+ * Get operational non-closed tickets filtered by tab: 'all' | 'unread' | 'read' | 'active'
+ * Note: Closed sessions are excluded.
+ * @param {string} filter
+ * @returns {Array}
+ */
+function getOperationalTickets(filter = 'all') {
+  const activeTickets = database.find('tickets').filter((t) => t.status !== 'closed');
+  let result = activeTickets;
+
+  if (filter === 'unread') {
+    result = activeTickets.filter((t) => (t.readStatus || 'unread') === 'unread');
+  } else if (filter === 'read') {
+    result = activeTickets.filter((t) => t.readStatus === 'read' && !t.chatActive);
+  } else if (filter === 'active') {
+    result = activeTickets.filter((t) => Boolean(t.chatActive));
+  }
+
+  return result.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+}
+
+/**
+ * Get ticket count stats for non-closed tickets
+ * @returns {{total: number, unread: number, read: number, active: number}}
+ */
+function getTicketCounts() {
+  const activeTickets = database.find('tickets').filter((t) => t.status !== 'closed');
+  const unread = activeTickets.filter((t) => (t.readStatus || 'unread') === 'unread').length;
+  const read = activeTickets.filter((t) => t.readStatus === 'read' && !t.chatActive).length;
+  const active = activeTickets.filter((t) => Boolean(t.chatActive)).length;
+
+  return {
+    total: activeTickets.length,
+    unread,
+    read,
+    active,
+  };
 }
 
 /**
@@ -191,6 +258,8 @@ module.exports = {
   createTicket,
   createSupportTicket,
   closeTicket,
+  markTicketRead,
+  startTicketChat,
   updateTicketStatus,
   assignAdmin,
   assignSeller,
@@ -200,5 +269,7 @@ module.exports = {
   getTicketsBySeller,
   getAllTickets,
   getOpenTickets,
+  getOperationalTickets,
+  getTicketCounts,
   getMessages,
 };

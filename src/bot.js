@@ -81,7 +81,7 @@ bot.on('document', async (ctx) => {
 });
 
 
-// ── Text message handler (ticket relay + admin input + donation custom input) ──
+// ── Text message handler (ticket relay + admin input + buyer note input + donation custom input) ──
 bot.on('text', async (ctx) => {
   if (ctx.message.text.startsWith('/')) return;
 
@@ -90,11 +90,15 @@ bot.on('text', async (ctx) => {
     const adminHandled = await adminHandler.handleAdminInput(ctx);
     if (adminHandled) return;
 
-    // 2. Donation custom nominal input
+    // 2. Buyer session input (e.g. order note required)
+    const buyerHandled = await productHandler.handleBuyerInput(ctx);
+    if (buyerHandled) return;
+
+    // 3. Donation custom nominal input
     const donationHandled = await donationHandler.handleDonationInput(ctx);
     if (donationHandled) return;
 
-    // 3. Ticket chat relay
+    // 4. Ticket chat relay
     const ticketHandled = await ticketHandler.handleTicketMessage(ctx, bot);
     if (ticketHandled) return;
   } catch (err) {
