@@ -35,12 +35,15 @@ async function showMyTickets(ctx, page = 0) {
   const user = userService.findByTelegramId(ctx.from.id);
   if (!user) return;
 
-  let tickets;
+  let allTickets;
   if (user.role === 'seller') {
-    tickets = ticketService.getTicketsBySeller(user.id);
+    allTickets = ticketService.getTicketsBySeller(user.id);
   } else {
-    tickets = ticketService.getTicketsByBuyer(user.id);
+    allTickets = ticketService.getTicketsByBuyer(user.id);
   }
+
+  // Filter out closed tickets! Only show active tickets (status !== 'closed')
+  const tickets = allTickets.filter((t) => t.status !== 'closed');
 
   const perPage = config.ITEMS_PER_PAGE;
   const totalPages = Math.max(1, Math.ceil(tickets.length / perPage));
@@ -49,7 +52,7 @@ async function showMyTickets(ctx, page = 0) {
   const pageTickets = tickets.slice(start, start + perPage);
 
   if (tickets.length === 0) {
-    const text = `🎫 <b>TICKET SAYA</b>\n\nBelum ada ticket.`;
+    const text = `🎫 <b>TICKET SAYA</b>\n\nBelum ada ticket aktif saat ini.`;
     const buttons = [navRow('menu_main')];
     return safeEditOrReply(ctx, text, { reply_markup: { inline_keyboard: buttons } });
   }
@@ -77,6 +80,7 @@ async function showMyTickets(ctx, page = 0) {
 
   return safeEditOrReply(ctx, text, { reply_markup: { inline_keyboard: buttons } });
 }
+
 
 /**
  * Show ticket detail

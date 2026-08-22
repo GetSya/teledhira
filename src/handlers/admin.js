@@ -326,17 +326,18 @@ async function showAdminOrderDetail(ctx, orderId) {
 async function showAdminTickets(ctx, page = 0) {
   if (!requireAdmin(ctx)) return;
 
-  const tickets = ticketService.getAllTickets();
+  const allTickets = ticketService.getAllTickets();
+  const activeTickets = allTickets.filter((t) => t.status !== 'closed');
   const perPage = config.ITEMS_PER_PAGE;
-  const totalPages = Math.max(1, Math.ceil(tickets.length / perPage));
+  const totalPages = Math.max(1, Math.ceil(activeTickets.length / perPage));
   const currentPage = Math.min(page, totalPages - 1);
   const start = currentPage * perPage;
-  const pageTickets = tickets.slice(start, start + perPage);
+  const pageTickets = activeTickets.slice(start, start + perPage);
 
-  let text = `🎫 <b>SEMUA TICKET</b> (${tickets.length})\n\n`;
+  let text = `🎫 <b>TICKET AKTIF</b> (${activeTickets.length})\n\n`;
 
-  if (tickets.length === 0) {
-    text += 'Belum ada ticket.';
+  if (activeTickets.length === 0) {
+    text += 'Belum ada ticket aktif.';
   } else {
     pageTickets.forEach((t, i) => {
       const num = start + i + 1;
@@ -358,6 +359,7 @@ async function showAdminTickets(ctx, page = 0) {
 
   return safeEditOrReply(ctx, text, { reply_markup: { inline_keyboard: buttons } });
 }
+
 
 // ── Users Management ──
 
